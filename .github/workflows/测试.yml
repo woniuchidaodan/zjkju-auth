@@ -1,0 +1,227 @@
+name: 测试（ipk + apk）
+
+on:
+  workflow_dispatch:
+
+permissions: write-all
+
+jobs:
+  build:
+    name: 构建 ${{ matrix.pkg_format }} (${{ matrix.sdk_version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pkg_format: ipk
+            sdk_version: 24.10.6
+            sdk_url: https://downloads.immortalwrt.org/releases/24.10.6/targets/mediatek/filogic/immortalwrt-sdk-24.10.6-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+          - pkg_format: apk
+            sdk_version: 25.12.2
+            sdk_url: https://mirrors.jlu.edu.cn/immortalwrt/releases/25.12.2/targets/mediatek/filogic/immortalwrt-sdk-25.12.2-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
+    outputs:
+      pkg_version: ${{ steps.extract-version.outputs.pkg_version }}
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 下载 ImmortalWrt SDK (${{ matrix.sdk_version }})
+        run: |
+          SDK_URL="${{ matrix.sdk_url }}"
+          echo "下载地址: $SDK_URL"
+          wget --show-progress "$SDK_URL" -O /tmp/sdk.tar.zst
+          sudo apt-get update -qq
+          sudo apt-get install -y zstd
+          sudo mkdir -p /opt/sdk
+          sudo tar --use-compress-program=unzstd -xf /tmp/sdk.tar.zst -C /opt/sdk --strip-components=1
+          sudo chown -R $(id -u):$(id -g) /opt/sdk
+          echo "=== SDK 目录预览 ==="
+          ls -la /opt/sdk | head
+
+      - name: 复制软件包到 SDK
+        run: |
+          mkdir -p /opt/sdk/package/luci-app-zjkju-auth
+          cp $GITHUB_WORKSPACE/Makefile /opt/sdk/package/luci-app-zjkju-auth/
+          cp -r $GITHUB_WORKSPACE/luasrc /opt/sdk/package/luci-app-zjkju-auth/
+          cp -r $GITHUB_WORKSPACE/root /opt/sdk/package/luci-app-zjkju-auth/
+          echo "=== 软件包文件树 ==="
+          find /opt/sdk/package/luci-app-zjkju-auth -type f | head -30
+
+      - name: 更新并安装 feeds
+        run: |
+          cd /opt/sdk
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: 配置编译选项（IPK）
+        if: matrix.pkg_format == 'ipk'
+        run: |
+          cd /opt/sdk
+          echo "CONFIG_PACKAGE_luci-app-zjkju-auth=m" >> .config
+          echo "CONFIG_PACKAGE_luci-compat=y" >> .config
+          echo "CONFIG_PACKAGE_luci-base=y" >> .config
+          echo "CONFIG_PACKAGE_curl=y" >> .config
+          # 显式禁用 APK，确保生成 IPK
+          echo "# CONFIG_USE_APK is not set" >> .config
+          make defconfig
+
+      - name: 配置编译选项（APK）
+        if: matrix.pkg_format == 'apk'
+        run: |
+          cd /opt/sdk
+          echo "CONFIG_PACKAGE_luci-app-zjkju-auth=m" >> .config
+          echo "CONFIG_PACKAGE_luci-compat=y" >> .config
+          echo "CONFIG_PACKAGE_luci-base=y" >> .config
+          echo "CONFIG_PACKAGE_curl=y" >> .config
+          # 显式启用 APK
+          echo "CONFIG_USE_APK=y" >> .config
+          make defconfig
+
+      - name: 开始编译
+        run: |
+          cd /opt/sdk
+          make package/luci-app-zjkju-auth/compile V=s -j$(nproc) 2>&1 | tee /tmp/build.log
+
+      - name: 收集生成的 ${{ matrix.pkg_format }} 包
+        if: success()
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/output
+          if [ "${{ matrix.pkg_format }}" = "ipk" ]; then
+            find /opt/sdk/bin/packages -name "luci-app-zjkju-auth*.ipk" -exec cp -v {} $GITHUB_WORKSPACE/output/ \;
+          else
+            find /opt/sdk/bin/packages -name "luci-app-zjkju-auth*.apk" -exec cp -v {} $GITHUB_WORKSPACE/output/ \;
+          fi
+          echo "=== 编译产物 ==="
+          ls -la $GITHUB_WORKSPACE/output/
+
+      - name: 提取版本号
+        id: extract-version
+        run: |
+          PKG_VERSION=$(grep '^PKG_VERSION:=' Makefile | cut -d= -f2 | tr -d ' ')
+          PKG_RELEASE=$(grep '^PKG_RELEASE:=' Makefile | cut -d= -f2 | tr -d ' ')
+          echo "pkg_version=${PKG_VERSION}-r${PKG_RELEASE}" >> $GITHUB_OUTPUT
+          echo "✅ 版本: ${PKG_VERSION}-r${PKG_RELEASE}"
+
+      - name: 上传编译产物
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ matrix.pkg_format }}
+          path: ${{ github.workspace }}/output/*
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: 上传编译日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.pkg_format }}
+          path: /tmp/build.log
+          retention-days: 7
+
+  release:
+    name: 📦 发布
+    needs: build
+    if: ${{ needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 下载所有编译产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pkg-*
+          path: ${{ github.workspace }}/output
+          merge-multiple: true
+
+      - name: 列出所有文件
+        run: |
+          echo "=== 全部产物 ==="
+          find ${{ github.workspace }}/output -type f | sort
+          echo ""
+          echo "=== 文件总数 ==="
+          find ${{ github.workspace }}/output -type f | wc -l
+
+      - name: 提取版本号
+        id: extract-version
+        run: |
+          echo "pkg_version=${{ needs.build.outputs.pkg_version }}" >> $GITHUB_OUTPUT
+
+      - name: 🚀 发布到 GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          TAG="v${{ needs.build.outputs.pkg_version }}"
+          TITLE="luci-app-zjkju-auth ${{ needs.build.outputs.pkg_version }}"
+
+          echo "==== 删除旧 Release (如果存在) ===="
+          gh release delete "$TAG" --repo "$REPO" --yes --cleanup-tag 2>/dev/null || echo "旧 Release 不存在"
+
+          echo "==== 创建新 Release: $TAG ===="
+          gh release create "$TAG" \
+            --repo "$REPO" \
+            --title "$TITLE" \
+            --notes "## luci-app-zjkju-auth ${{ needs.build.outputs.pkg_version }}
+
+          湛江科技学院锐捷 ePortal 校园网自动认证的 LuCI 应用。
+
+          ### 📋 版本信息
+          - 版本: \`v${{ needs.build.outputs.pkg_version }}\`
+          - 包架构: **all（全架构通用）**
+          - 目标平台: ImmortalWrt / OpenWrt
+
+          ### 📦 支持的包格式
+
+          | 文件格式 | 适用系统 | 安装命令 |
+          |---------|---------|---------|
+          | \`.ipk\` | OpenWrt / ImmortalWrt 21.02 ~ 24.10 | \`opkg install luci-app-zjkju-auth_*.ipk\` |
+          | \`.apk\` | OpenWrt / ImmortalWrt 25.12+ | \`apk add --allow-untrusted luci-app-zjkju-auth_*.apk\` |
+
+          ### 🚀 安装步骤
+
+          **方式一：opkg（旧版本系统）**
+          \`\`\`bash
+          scp luci-app-zjkju-auth_*.ipk root@192.168.1.1:/tmp/
+          ssh root@192.168.1.1
+          opkg update
+          opkg install luci-compat curl
+          opkg install /tmp/luci-app-zjkju-auth_*.ipk
+          \`\`\`
+
+          **方式二：apk（新版本系统）**
+          \`\`\`bash
+          scp luci-app-zjkju-auth_*.apk root@192.168.1.1:/tmp/
+          ssh root@192.168.1.1
+          apk update
+          apk add luci-compat curl
+          apk add --allow-untrusted /tmp/luci-app-zjkju-auth_*.apk
+          \`\`\`
+
+          ### 📝 配置
+
+          安装后进入 **服务 → ZJKJU 校园网认证**，填写学号和密码，点击 **保存并应用**。
+
+          ### ✨ 特性
+
+          - ✅ 自动认证，开机自启
+          - ✅ 断线自动重连
+          - ✅ 实时状态徽章（在线/离线）
+          - ✅ Web 界面日志查看，一键清空
+          - ✅ 全架构通用，包体积仅 ~7 KB
+          - ✅ 支持 ipk / apk 双格式"
+
+          echo "==== 上传所有包 ===="
+          gh release upload "$TAG" \
+            ${{ github.workspace }}/output/*.ipk \
+            ${{ github.workspace }}/output/*.apk \
+            --repo "$REPO" \
+            --clobber 2>&1 || echo "部分文件上传失败，检查是否有匹配文件"
+
+          echo "==== 验证 ===="
+          gh release view "$TAG" --repo "$REPO"
+
+          echo "✅ 发布完成"
+          echo "Release: https://github.com/$REPO/releases/tag/$TAG"
