@@ -5,12 +5,7 @@
 			"uci": [ "zjkju-auth" ]
 		},
 		"write": {
-			"uci": [ "zjkju-auth" ],
-			"file": {
-				"/etc/init.d/zjkju-auth restart": [ "exec" ],
-				"/etc/init.d/zjkju-auth start": [ "exec" ],
-				"/etc/init.d/zjkju-auth stop": [ "exec" ]
-			}
+			"uci": [ "zjkju-auth" ]
 		}
 	}
 }
