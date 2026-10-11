@@ -9,6 +9,9 @@ ONLINE_FLAG="/tmp/zjkju-auth-online-printed"
 
 logger -t zjkju-auth "wrapper started"
 
+# ============================================================
+# 在线检测：双 DNS ping + HTTP 兜底
+# ============================================================
 is_online() {
     for PING_TARGET in 223.5.5.5 223.6.6.6; do
         if ping -c 1 -W 2 "$PING_TARGET" >/dev/null 2>&1; then
@@ -20,6 +23,9 @@ is_online() {
     [ "$BODY" = "Microsoft Connect Test" ]
 }
 
+# ============================================================
+# 抓取认证页 URL（三层兜底）
+# ============================================================
 fetch_auth_url() {
     config_get manual_url main manual_url
     if [ -n "$manual_url" ]; then
@@ -70,6 +76,9 @@ urlencode_query() {
     echo "$1" | sed 's/=/\%3D/g; s/&/\%26/g'
 }
 
+# ============================================================
+# 执行一次认证
+# ============================================================
 do_auth() {
     AUTH_URL="$1"
     USERNAME="$2"
@@ -86,7 +95,6 @@ do_auth() {
 
     logger -t zjkju-auth "锐捷认证客户端启动"
     logger -t zjkju-auth "用户名: $USERNAME"
-    logger -t zjkju-auth "身份类型: $SERVICE"
     logger -t zjkju-auth "认证地址: $AUTH_URL"
     logger -t zjkju-auth "提取到queryString (长度: ${#QUERY_STRING})"
 
@@ -125,6 +133,9 @@ do_auth() {
     esac
 }
 
+# ============================================================
+# 主循环
+# ============================================================
 while true; do
     config_load zjkju-auth
 
@@ -145,10 +156,6 @@ while true; do
         continue
     fi
 
-    # ============================================================
-    # 在线检测
-    # 首次在线时打印一次"已联网，无需认证"，之后静默
-    # ============================================================
     if is_online; then
         if [ ! -f "$ONLINE_FLAG" ]; then
             logger -t zjkju-auth "已联网，无需认证"
@@ -158,20 +165,19 @@ while true; do
         continue
     fi
 
-    # 掉线了：清除标记（下次恢复在线时会再打印一次）
     rm -f "$ONLINE_FLAG"
 
-    # ============================================================
-    # 抓 URL + 认证
-    # ============================================================
     AUTH_URL=$(fetch_auth_url)
     if [ -z "$AUTH_URL" ]; then
-        # 网关观察期，静默重试
         sleep 5
         continue
     fi
 
+    # 兜底：service 为空时用硬编码
+    [ -z "$service" ] && service="%E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91"
+
     logger -t zjkju-auth "检测到掉线，开始认证"
+
     if do_auth "$AUTH_URL" "$username" "$password" "$service"; then
         case "$AUTH_URL" in
             *wlanuserip=*)
