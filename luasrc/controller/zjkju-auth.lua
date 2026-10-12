@@ -1,5 +1,7 @@
 module("luci.controller.zjkju-auth", package.seeall)
 
+local LOG_FILE = "/var/log/zjkju-auth.log"
+
 function index()
 	if not nixio.fs.access("/etc/config/zjkju-auth") then
 		return
@@ -23,13 +25,45 @@ function index()
 end
 
 function action_get_log()
-	local sys = require "luci.sys"
-	local log = sys.exec("logread -e zjkju-auth 2>/dev/null | tail -100")
-	if not log or log == "" then
-		log = "（暂无日志，服务可能还未启动过）"
+	local http = require "luci.http"
+	local fs = require "nixio.fs"
+
+	http.prepare_content("text/plain; charset=utf-8")
+
+	if not fs.access(LOG_FILE) then
+		http.write("（暂无日志，服务可能还未启动过）")
+		return
 	end
-	luci.http.prepare_content("text/plain; charset=utf-8")
-	luci.http.write(log)
+
+	local data = fs.readfile(LOG_FILE) or ""
+	if data == "" then
+		http.write("（日志文件为空）")
+		return
+	end
+
+	-- 太大时只取最后 100KB，避免把路由器内存吃光
+	if #data > 100 * 1024 then
+		data = data:sub(-(100 * 1024))
+		-- 从第一个换行开始，避免半行
+		local nl = data:find("\n")
+		if nl then data = data:sub(nl + 1) end
+	end
+
+	-- 取最后 100 行
+	local lines = {}
+	for line in (data .. "\n"):gmatch("(.-)\n") do
+		if line ~= "" then
+			lines[#lines + 1] = line
+		end
+	end
+
+	local start = math.max(1, #lines - 100 + 1)
+	local buf = {}
+	for i = start, #lines do
+		buf[#buf + 1] = lines[i]
+	end
+
+	http.write(table.concat(buf, "\n"))
 end
 
 function action_restart()
@@ -40,10 +74,13 @@ function action_restart()
 end
 
 function action_clear_log()
-	local sys = require "luci.sys"
-	sys.call("/etc/init.d/log restart >/dev/null 2>&1 &")
-	luci.http.prepare_content("text/plain; charset=utf-8")
-	luci.http.write("日志已清空")
+	local http = require "luci.http"
+	local fs = require "nixio.fs"
+
+	fs.writefile(LOG_FILE, "")
+
+	http.prepare_content("application/json")
+	http.write('{"ok":true}')
 end
 
 function action_status()
