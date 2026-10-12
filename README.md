@@ -32,13 +32,12 @@
 | 项目 | 版本 |
 |------|------|
 | 系统 | ImmortalWrt / OpenWrt 21.02+ |
-| 包格式 | ipk（opkg） |
+| 包格式 | ipk（opkg）、apk (apk) |
 | CPU 架构 | **全架构通用**（aarch64 / armv7 / mips / mipsel / x86_64） |
 | 依赖 | `luci-base`、`luci-compat`、`curl` |
 
 > 本包为** shell 实现**，不含任何预编译二进制，因此一个 ipk 通吃所有 CPU 架构，理论上支持所有 ImmortalWrt / OpenWrt 系统。
 
-> 💡 OpenWrt 25.12+ 已改用 apk 包格式，本仓库暂未提供 apk 版本。
 
 ## 📥 下载预编译版本
 
@@ -47,6 +46,7 @@
 | 文件名 | 适用系统 | 架构 |
 |--------|----------|------|
 | luci-app-zjkju-auth_1.0.1-r1_all.ipk | OpenWrt / ImmortalWrt 21.02 ~ 24.10 | **全架构** |
+| luci-app-zjkju-auth-1.0.2-r1.apk | OpenWrt / ImmortalWrt 12.12+ | **全架构** |
 
 ## 🚀 安装
 
@@ -238,7 +238,7 @@ A：理论上只要认证页面结构相同就能用，但需要自行测试。�
 
 **Q：25.12 能用吗？**
 
-A：OpenWrt 25.12+ 使用 apk 包格式，需单独编译。目前暂未提供 apk 版本。
+A：OpenWrt 25.12+ 使用 apk 包格式，需单独编译。目前已经支持 apk 版本。
 
 **Q：安装后 LuCI 里看不到菜单？**
 
