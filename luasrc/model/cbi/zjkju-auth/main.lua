@@ -4,44 +4,52 @@ local uci       = require("luci.model.uci").cursor()
 local m, s, o
 
 m = Map("zjkju-auth", translate("ZJKJU 校园网认证"),
-	translate("湛江科技学院锐捷 ePortal 自动认证。填写学号和密码后保存，服务会自动在后台运行。"))
+	translate("在路由器上自动完成校园网 ePortal 认证。修改后请点击“保存并应用”，服务会立即重启。"))
 
-s = m:section(NamedSection, "main", "zjkju-auth", translate("基本设置"))
+s = m:section(NamedSection, "main", "zjkju-auth", translate("认证设置"))
 s.anonymous = true
 s.addremove = false
 
-o = s:option(Flag, "enabled", translate("启用"))
+o = s:option(Flag, "enabled", translate("启用认证"),
+	translate("勾选并保存后，开机自动启动认证服务"))
 o.default = 1
 o.rmempty = false
 
-o = s:option(Value, "username", translate("学号"))
+o = s:option(Value, "username", translate("学号"),
+	translate("校园网账号，一般就是学号"))
 o.datatype = "string"
 o.rmempty = false
 
-o = s:option(Value, "password", translate("密码"))
+o = s:option(Value, "password", translate("密码"),
+	translate("校园网密码，初始为身份证后六位"))
 o.password = true
 o.datatype = "string"
 o.rmempty = false
 
--- 服务类型：前端显示"电信校园网"，底层存 %E7%94%B5...
-o = s:option(ListValue, "service", translate("服务类型"))
+o = s:option(ListValue, "service", translate("服务类型"),
+	translate("默认使用“电信校园网”，一般无需修改"))
 o:value("%E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91", translate("电信校园网"))
 o.default = "%E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91"
 o.rmempty = false
-o.description = translate("电信校园网请保持默认值")
 
--- 兜底：UCI 里有其他值时也列出
 local current = uci:get("zjkju-auth", "main", "service") or ""
 if current ~= "" and current ~= "%E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91" then
 	o:value(current, current .. translate("（当前已保存）"))
 end
 
-o = s:option(TextValue, "manual_url", translate("手动认证 URL（可选）"),
-	translate("自动抓取失败时的兜底。留空则自动抓取。可以从浏览器地址栏复制完整认证页 URL 粘贴到这里。"))
-o.rows = 3
+o = s:option(Value, "manual_url", translate("手动认证地址"),
+	translate("留空表示自动探测。只有自动获取失败时才需要填完整认证页地址"))
+o.datatype = "string"
 o.rmempty = true
 o.optional = true
 
+-- 日志文件（只读）
+o = s:option(DummyValue, "_log_location", translate("日志文件"))
+o.rawhtml = true
+o.default = "<code>/tmp/zjkju-auth.log</code>"
+o.description = translate("默认 /tmp/zjkju-auth.log（内存盘，重启清空）")
+
+-- 运行日志区
 local sec = m:section(SimpleSection)
 sec.template = "zjkju-auth/log"
 
