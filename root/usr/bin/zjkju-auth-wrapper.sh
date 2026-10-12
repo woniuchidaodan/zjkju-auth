@@ -11,6 +11,7 @@ LOG_MAX_KB=256
 FAIL_COUNT=0
 MAX_FAIL=3
 COOLDOWN_SEC=300
+COOLDOWN_CHECK_INTERVAL=10
 
 . /lib/functions.sh
 
@@ -46,7 +47,6 @@ fetch_auth_url() {
         return 0
     fi
 
-    # 触发网关 302 的探测地址（不含 example.com，避免语义不当）
     for TRIGGER in \
         "http://www.baidu.com/" \
         "http://www.qualcomm.com/" \
@@ -149,6 +149,37 @@ do_auth() {
 }
 
 # ============================================================
+# 冷却：每 10 秒检测配置是否变化，用户改密码后提前结束
+# 参数: $1=当前账号  $2=当前密码
+# ============================================================
+cooldown_wait() {
+    local cur_user="$1"
+    local cur_pass="$2"
+    local waited=0
+
+    while [ "$waited" -lt "$COOLDOWN_SEC" ]; do
+        sleep "$COOLDOWN_CHECK_INTERVAL"
+        waited=$((waited + COOLDOWN_CHECK_INTERVAL))
+
+        # 重新读配置
+        config_load zjkju-auth
+        local new_user
+        local new_pass
+        config_get new_user main username
+        config_get new_pass main password
+
+        # 账号或密码变化 → 提前结束冷却
+        if [ "$new_user" != "$cur_user" ] || [ "$new_pass" != "$cur_pass" ]; then
+            log_msg "检测到账号/密码已修改，提前结束冷却，立即重新认证"
+            return 0
+        fi
+    done
+
+    log_msg "冷却结束，恢复认证尝试"
+    return 0
+}
+
+# ============================================================
 # 主循环
 # ============================================================
 STATE="init"
@@ -232,11 +263,10 @@ while true; do
         FAIL_COUNT=$((FAIL_COUNT + 1))
         if [ "$FAIL_COUNT" -ge "$MAX_FAIL" ]; then
             log_msg "连续 ${FAIL_COUNT} 次认证失败，冷却 ${COOLDOWN_SEC} 秒，请检查学号/密码/服务类型"
-            sleep "$COOLDOWN_SEC"
+            cooldown_wait "$username" "$password"
             FAIL_COUNT=0
         fi
     fi
-    # RC=2（URL 无效 / 响应无法识别）不计入熔断
 
     sleep "$check_interval"
 done
