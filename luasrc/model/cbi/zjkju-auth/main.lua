@@ -37,11 +37,11 @@ if current ~= "" and current ~= "%E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91" 
 	o:value(current, current .. translate("（当前已保存）"))
 end
 
+-- 手动认证地址：去掉 o.optional，直接显示
 o = s:option(Value, "manual_url", translate("手动认证地址"),
 	translate("留空表示自动探测。只有自动获取失败时才需要填完整认证页地址"))
 o.datatype = "string"
 o.rmempty = true
-o.optional = true
 
 -- 日志文件（只读）
 o = s:option(DummyValue, "_log_location", translate("日志文件"))
