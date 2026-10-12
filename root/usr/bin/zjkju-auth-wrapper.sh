@@ -7,13 +7,14 @@ ONLINE_FLAG="/tmp/zjkju-auth-online-printed"
 LOG_FILE="/var/log/zjkju-auth.log"
 LOG_MAX_KB=256
 
+# 失败熔断
+FAIL_COUNT=0
+MAX_FAIL=3
+COOLDOWN_SEC=300
+
 . /lib/functions.sh
 
-# ============================================================
-# 日志：写文件 + 同步写 syslog（双写）
-# ============================================================
 log_msg() {
-    # 超过上限先截断，只保留最后 2000 行
     if [ -f "$LOG_FILE" ]; then
         SIZE_KB=$(du -k "$LOG_FILE" 2>/dev/null | awk '{print $1}')
         if [ -n "$SIZE_KB" ] && [ "$SIZE_KB" -gt "$LOG_MAX_KB" ] 2>/dev/null; then
@@ -21,11 +22,7 @@ log_msg() {
             mv "${LOG_FILE}.tmp" "$LOG_FILE" 2>/dev/null
         fi
     fi
-
-    # 写文件（带时间戳）
     echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOG_FILE"
-
-    # 同时写 syslog（兼容 logread -e zjkju-auth）
     logger -t zjkju-auth "$1"
 }
 
@@ -49,9 +46,9 @@ fetch_auth_url() {
         return 0
     fi
 
+    # 触发网关 302 的探测地址（不含 example.com，避免语义不当）
     for TRIGGER in \
         "http://www.baidu.com/" \
-        "http://www.example.com/" \
         "http://www.qualcomm.com/" \
         "http://www.neverssl.com/" \
         "http://www.qq.com/"; do
@@ -92,6 +89,10 @@ urlencode_query() {
     echo "$1" | sed 's/=/\%3D/g; s/&/\%26/g'
 }
 
+# 返回值:
+#   0 = 成功
+#   1 = 业务失败（认证被拒，计入熔断）
+#   2 = 无法判定（网络波动/响应异常，不计入熔断）
 do_auth() {
     AUTH_URL="$1"
     USERNAME="$2"
@@ -101,7 +102,7 @@ do_auth() {
     QUERY_STRING="${AUTH_URL#*\?}"
     if [ "$QUERY_STRING" = "$AUTH_URL" ]; then
         log_msg "URL 无效，跳过"
-        return 1
+        return 2
     fi
 
     QS_ENCODED=$(urlencode_query "$QUERY_STRING")
@@ -141,8 +142,8 @@ do_auth() {
             return 1
             ;;
         *)
-            log_msg "认证请求已提交"
-            return 1
+            log_msg "认证请求已提交（响应无法识别）"
+            return 2
             ;;
     esac
 }
@@ -173,6 +174,7 @@ while true; do
         continue
     fi
 
+    # ============ 在线 ============
     if is_online; then
         if [ ! -f "$ONLINE_FLAG" ]; then
             case "$STATE" in
@@ -190,14 +192,17 @@ while true; do
 
         STATE="online"
         EVER_ONLINE=1
+        FAIL_COUNT=0
         sleep "$check_interval"
         continue
     fi
 
+    # ============ 离线 ============
     rm -f "$ONLINE_FLAG"
 
     AUTH_URL=$(fetch_auth_url)
     if [ -z "$AUTH_URL" ]; then
+        # 拿不到 URL：网络波动，不计入熔断
         sleep 5
         continue
     fi
@@ -213,13 +218,25 @@ while true; do
 
     [ -z "$service" ] && service="%E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91"
 
-    if do_auth "$AUTH_URL" "$username" "$password" "$service"; then
+    do_auth "$AUTH_URL" "$username" "$password" "$service"
+    RC=$?
+
+    if [ "$RC" = "0" ]; then
         case "$AUTH_URL" in
             *wlanuserip=*)
                 echo "$AUTH_URL" > "$CACHE_FILE"
                 ;;
         esac
+        FAIL_COUNT=0
+    elif [ "$RC" = "1" ]; then
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        if [ "$FAIL_COUNT" -ge "$MAX_FAIL" ]; then
+            log_msg "连续 ${FAIL_COUNT} 次认证失败，冷却 ${COOLDOWN_SEC} 秒，请检查学号/密码/服务类型"
+            sleep "$COOLDOWN_SEC"
+            FAIL_COUNT=0
+        fi
     fi
+    # RC=2（URL 无效 / 响应无法识别）不计入熔断
 
     sleep "$check_interval"
 done
