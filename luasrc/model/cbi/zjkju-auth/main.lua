@@ -46,8 +46,8 @@ o.optional = true
 -- 日志文件（只读）
 o = s:option(DummyValue, "_log_location", translate("日志文件"))
 o.rawhtml = true
-o.default = "<code>/tmp/zjkju-auth.log</code>"
-o.description = translate("默认 /tmp/zjkju-auth.log（内存盘，重启清空）")
+o.default = "<code>/var/log/zjkju-auth.log</code>"
+o.description = translate("默认 /var/log/zjkju-auth.log（内存盘，重启清空）。想重启后保留可改成 /etc/zjkju-auth.log")
 
 -- 运行日志区
 local sec = m:section(SimpleSection)
