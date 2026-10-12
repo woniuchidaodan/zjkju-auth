@@ -244,9 +244,90 @@ A：OpenWrt 25.12+ 使用 apk 包格式，需单独编译。目前暂未提供 a
 
 A：浏览器缓存问题。按 `Ctrl+Shift+R` 强制刷新，或退出 LuCI 重新登录。
 
-**Q：如何彻底卸载？**
+## 🔬 抓包获取 service 值（适配其他学校）
+本仓库硬编码的 service 值是针对湛江科技学院的"电信校园网"。如果后续学校更换了服务类型也可以通过此方法写入服务类型。如果你要适配其他学校，需要抓出你们学校的 service 值。
 
-A：SSH 执行 `uninstall-zjkju`，会自动停止服务、删除所有相关文件、清理缓存。
+为什么需要抓包？
+锐捷 ePortal 认证要求 POST 请求里带 service 字段。不同学校、不同运营商的值都不一样，必须实测。常见的有：
+
+default（学生）
+
+Teacher（教工）
+
+电信校园网 / 移动校园网 / 联通校园网
+
+学校_学生 / 学校_教工
+
+抓包步骤（5 步）
+第 1 步：打开抓包
+
+浏览器按 F12
+
+切换到 Network（网络） 标签
+
+勾选 Preserve log（保留日志）
+
+第 2 步：触发认证
+
+注销校园网
+
+浏览器访问 baidu.com → 自动跳到认证页
+
+输入账号密码，选好服务类型，点登录
+
+第 3 步：找到 login 请求
+
+在 Network 面板搜索框输入 login
+
+找到 InterFace.do?method=login（POST 请求）
+
+右键它 → Copy → Copy as cURL (bash)
+
+粘贴到记事本
+
+第 4 步：提取 service 值
+
+在复制的 curl 命令里找到 service= 字段：
+
+text
+--data-raw 'userId=xxx&password=xxx&service=%25E7%2594%25B5%25E4%25BF%25A1%25E6%25A0%25A1%25E5%259B%25AD%25E7%25BD%2591&...'
+把 %25 全部替换成 %，得到：
+
+text
+%E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91
+第 5 步：替换代码里的值
+
+打开 root/etc/config/zjkju-auth，把 service 改成第 4 步得到的新值：
+
+text
+option service '新抓的service值'
+同时修改 luasrc/model/cbi/zjkju-auth/main.lua 里的候选值，让界面能显示成中文。
+
+快速解码命令（Linux / WSL / Mac）
+bash
+echo "%25E7%2594%25B5%25E4%25BF%25A1%25E6%25A0%25A1%25E5%259B%25AD%25E7%25BD%2591" | sed 's/%25/%/g'
+# 输出: %E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91
+再解一次验证：
+
+bash
+echo "%E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91" | sed 's/%\([0-9A-F][0-9A-F]\)/\\x\1/g'
+# 或用在线 URL 解码工具，结果: 电信校园网
+原理（1 句话）
+浏览器发双重编码 → 我们硬编码用单次编码 → curl 再编码一次 → 还原成双重 → 和浏览器一致。
+
+完整数据流
+阶段	值
+浏览器选"电信校园网"	电信校园网
+JS 编码（单次）	%E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91
+表单提交再编码（双重）	%25E7%2594%25B5...%25BD%2591
+我们硬编码存的值	%E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91
+curl --data-urlencode 再编码	%25E7%2594%25B5...%25BD%2591 ← 和浏览器一致 ✅
+修改认证服务器 IP
+如果你们学校的认证服务器不是 10.80.80.249，还要改 root/usr/bin/zjkju-auth-wrapper.sh 里的：
+
+sh
+AUTH_SERVER="http://你们学校的认证服务器IP"
+改完重新编译即可。
 
 ## 🙏 致谢
 
