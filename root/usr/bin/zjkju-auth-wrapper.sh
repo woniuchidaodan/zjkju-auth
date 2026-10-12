@@ -127,7 +127,7 @@ do_auth() {
 
 # ============================================================
 # 主循环
-#   STATE:  init / online / offline
+#   STATE:       init / online / offline
 #   EVER_ONLINE: 0 = 从未在线过；1 = 在线过
 # ============================================================
 STATE="init"
@@ -158,16 +158,12 @@ while true; do
         if [ ! -f "$ONLINE_FLAG" ]; then
             case "$STATE" in
                 init)
-                    # 首次启动就在线
                     logger -t zjkju-auth "已联网，无需认证"
                     ;;
                 offline)
                     if [ "$EVER_ONLINE" = "1" ]; then
-                        # 之前在线过，掉线后重连成功
                         logger -t zjkju-auth "网络已恢复"
                     fi
-                    # EVER_ONLINE=0：首次启动就离线，认证成功后回到这里
-                    # 静默——"认证成功！"已经在 do_auth 里打了
                     ;;
             esac
             touch "$ONLINE_FLAG"
@@ -188,7 +184,6 @@ while true; do
         continue
     fi
 
-    # 状态从"非 offline"切到"offline"时，打印一次起始日志
     if [ "$STATE" != "offline" ]; then
         if [ "$EVER_ONLINE" = "1" ]; then
             logger -t zjkju-auth "网络已断开，开始尝试重新认证"
