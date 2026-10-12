@@ -1,7 +1,25 @@
 <%
-local sys = require "luci.sys"
-local log = sys.exec("logread -e zjkju-auth 2>/dev/null | tail -100")
-if not log or log == "" then log = "（暂无日志，服务可能还未启动过）" end
+local fs = require "nixio.fs"
+local logfile = "/var/log/zjkju-auth.log"
+local log = ""
+
+if fs.access(logfile) then
+	log = fs.readfile(logfile) or ""
+end
+
+if not log or log == "" then
+	log = "（暂无日志，服务可能还未启动过）"
+else
+	-- 只取最后 100 行
+	local lines = {}
+	for line in (log .. "\n"):gmatch("(.-)\n") do
+		if line ~= "" then lines[#lines + 1] = line end
+	end
+	local start = math.max(1, #lines - 100 + 1)
+	local buf = {}
+	for i = start, #lines do buf[#buf + 1] = lines[i] end
+	log = table.concat(buf, "\n")
+end
 %>
 
 <style>
@@ -220,7 +238,7 @@ if not log or log == "" then log = "（暂无日志，服务可能还未启动�
 	};
 
 	window.zjkjuClearLog = function() {
-		if (!confirm('<%:确定要清空系统日志吗？%>')) return;
+		if (!confirm('<%:确定要清空日志吗？%>')) return;
 		XHR.get(clearUrl, null, function() {
 			setTimeout(function() {
 				logBox.textContent = '（日志已清空）';
