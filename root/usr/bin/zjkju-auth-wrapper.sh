@@ -4,10 +4,32 @@ AUTH_SERVER="http://10.80.80.249"
 UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 CACHE_FILE="/tmp/zjkju-auth-last-url"
 ONLINE_FLAG="/tmp/zjkju-auth-online-printed"
+LOG_FILE="/var/log/zjkju-auth.log"
+LOG_MAX_KB=256
 
 . /lib/functions.sh
 
-logger -t zjkju-auth "wrapper started"
+# ============================================================
+# 日志：写文件 + 同步写 syslog（双写）
+# ============================================================
+log_msg() {
+    # 超过上限先截断，只保留最后 2000 行
+    if [ -f "$LOG_FILE" ]; then
+        SIZE_KB=$(du -k "$LOG_FILE" 2>/dev/null | awk '{print $1}')
+        if [ -n "$SIZE_KB" ] && [ "$SIZE_KB" -gt "$LOG_MAX_KB" ] 2>/dev/null; then
+            tail -n 2000 "$LOG_FILE" > "${LOG_FILE}.tmp" 2>/dev/null
+            mv "${LOG_FILE}.tmp" "$LOG_FILE" 2>/dev/null
+        fi
+    fi
+
+    # 写文件（带时间戳）
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOG_FILE"
+
+    # 同时写 syslog（兼容 logread -e zjkju-auth）
+    logger -t zjkju-auth "$1"
+}
+
+log_msg "wrapper started"
 
 is_online() {
     for PING_TARGET in 223.5.5.5 223.6.6.6; do
@@ -78,17 +100,17 @@ do_auth() {
 
     QUERY_STRING="${AUTH_URL#*\?}"
     if [ "$QUERY_STRING" = "$AUTH_URL" ]; then
-        logger -t zjkju-auth "URL 无效，跳过"
+        log_msg "URL 无效，跳过"
         return 1
     fi
 
     QS_ENCODED=$(urlencode_query "$QUERY_STRING")
 
-    logger -t zjkju-auth "正在尝试认证..."
-    logger -t zjkju-auth "锐捷认证客户端启动"
-    logger -t zjkju-auth "用户名: $USERNAME"
-    logger -t zjkju-auth "认证地址: $AUTH_URL"
-    logger -t zjkju-auth "提取到queryString (长度: ${#QUERY_STRING})"
+    log_msg "正在尝试认证..."
+    log_msg "锐捷认证客户端启动"
+    log_msg "用户名: $USERNAME"
+    log_msg "认证地址: $AUTH_URL"
+    log_msg "提取到queryString (长度: ${#QUERY_STRING})"
 
     RESPONSE=$(curl -s --max-time 10 -X POST \
         "$AUTH_SERVER/eportal/InterFace.do?method=login" \
@@ -106,20 +128,20 @@ do_auth() {
         --data-urlencode "passwordEncrypt=false" \
         2>&1)
 
-    logger -t zjkju-auth "响应内容: $(echo "$RESPONSE" | head -c 300)"
+    log_msg "响应内容: $(echo "$RESPONSE" | head -c 300)"
 
     case "$RESPONSE" in
         *'"result":"success"'*)
-            logger -t zjkju-auth "认证成功！"
+            log_msg "认证成功！"
             return 0
             ;;
         *'"result":"fail"'*)
             MSG=$(echo "$RESPONSE" | grep -oE '"message":"[^"]+"' | head -1)
-            logger -t zjkju-auth "认证失败: $MSG"
+            log_msg "认证失败: $MSG"
             return 1
             ;;
         *)
-            logger -t zjkju-auth "认证请求已提交"
+            log_msg "认证请求已提交"
             return 1
             ;;
     esac
@@ -127,8 +149,6 @@ do_auth() {
 
 # ============================================================
 # 主循环
-#   STATE:       init / online / offline
-#   EVER_ONLINE: 0 = 从未在线过；1 = 在线过
 # ============================================================
 STATE="init"
 EVER_ONLINE=0
@@ -148,21 +168,20 @@ while true; do
     fi
 
     if [ -z "$username" ] || [ -z "$password" ]; then
-        logger -t zjkju-auth "未配置学号/密码，等待用户在 LuCI 界面填写"
+        log_msg "未配置学号/密码，等待用户在 LuCI 界面填写"
         sleep 30
         continue
     fi
 
-    # ============ 在线 ============
     if is_online; then
         if [ ! -f "$ONLINE_FLAG" ]; then
             case "$STATE" in
                 init)
-                    logger -t zjkju-auth "已联网，无需认证"
+                    log_msg "已联网，无需认证"
                     ;;
                 offline)
                     if [ "$EVER_ONLINE" = "1" ]; then
-                        logger -t zjkju-auth "网络已恢复"
+                        log_msg "网络已恢复"
                     fi
                     ;;
             esac
@@ -175,7 +194,6 @@ while true; do
         continue
     fi
 
-    # ============ 离线 ============
     rm -f "$ONLINE_FLAG"
 
     AUTH_URL=$(fetch_auth_url)
@@ -186,9 +204,9 @@ while true; do
 
     if [ "$STATE" != "offline" ]; then
         if [ "$EVER_ONLINE" = "1" ]; then
-            logger -t zjkju-auth "网络已断开，开始尝试重新认证"
+            log_msg "网络已断开，开始尝试重新认证"
         else
-            logger -t zjkju-auth "网络未连接，开始认证"
+            log_msg "网络未连接，开始认证"
         fi
         STATE="offline"
     fi
