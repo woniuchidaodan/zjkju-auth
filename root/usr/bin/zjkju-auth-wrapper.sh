@@ -9,9 +9,6 @@ ONLINE_FLAG="/tmp/zjkju-auth-online-printed"
 
 logger -t zjkju-auth "wrapper started"
 
-# ============================================================
-# 在线检测：双 DNS ping + HTTP 兜底
-# ============================================================
 is_online() {
     for PING_TARGET in 223.5.5.5 223.6.6.6; do
         if ping -c 1 -W 2 "$PING_TARGET" >/dev/null 2>&1; then
@@ -23,9 +20,6 @@ is_online() {
     [ "$BODY" = "Microsoft Connect Test" ]
 }
 
-# ============================================================
-# 抓取认证页 URL（三层兜底）
-# ============================================================
 fetch_auth_url() {
     config_get manual_url main manual_url
     if [ -n "$manual_url" ]; then
@@ -76,9 +70,6 @@ urlencode_query() {
     echo "$1" | sed 's/=/\%3D/g; s/&/\%26/g'
 }
 
-# ============================================================
-# 执行一次认证
-# ============================================================
 do_auth() {
     AUTH_URL="$1"
     USERNAME="$2"
@@ -93,6 +84,7 @@ do_auth() {
 
     QS_ENCODED=$(urlencode_query "$QUERY_STRING")
 
+    logger -t zjkju-auth "正在尝试认证..."
     logger -t zjkju-auth "锐捷认证客户端启动"
     logger -t zjkju-auth "用户名: $USERNAME"
     logger -t zjkju-auth "认证地址: $AUTH_URL"
@@ -135,7 +127,12 @@ do_auth() {
 
 # ============================================================
 # 主循环
+#   STATE:  init / online / offline
+#   EVER_ONLINE: 0 = 从未在线过；1 = 在线过
 # ============================================================
+STATE="init"
+EVER_ONLINE=0
+
 while true; do
     config_load zjkju-auth
 
@@ -156,15 +153,33 @@ while true; do
         continue
     fi
 
+    # ============ 在线 ============
     if is_online; then
         if [ ! -f "$ONLINE_FLAG" ]; then
-            logger -t zjkju-auth "已联网，无需认证"
+            case "$STATE" in
+                init)
+                    # 首次启动就在线
+                    logger -t zjkju-auth "已联网，无需认证"
+                    ;;
+                offline)
+                    if [ "$EVER_ONLINE" = "1" ]; then
+                        # 之前在线过，掉线后重连成功
+                        logger -t zjkju-auth "网络已恢复"
+                    fi
+                    # EVER_ONLINE=0：首次启动就离线，认证成功后回到这里
+                    # 静默——"认证成功！"已经在 do_auth 里打了
+                    ;;
+            esac
             touch "$ONLINE_FLAG"
         fi
+
+        STATE="online"
+        EVER_ONLINE=1
         sleep "$check_interval"
         continue
     fi
 
+    # ============ 离线 ============
     rm -f "$ONLINE_FLAG"
 
     AUTH_URL=$(fetch_auth_url)
@@ -173,10 +188,17 @@ while true; do
         continue
     fi
 
-    # 兜底：service 为空时用硬编码
-    [ -z "$service" ] && service="%E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91"
+    # 状态从"非 offline"切到"offline"时，打印一次起始日志
+    if [ "$STATE" != "offline" ]; then
+        if [ "$EVER_ONLINE" = "1" ]; then
+            logger -t zjkju-auth "网络已断开，开始尝试重新认证"
+        else
+            logger -t zjkju-auth "网络未连接，开始认证"
+        fi
+        STATE="offline"
+    fi
 
-    logger -t zjkju-auth "检测到掉线，开始认证"
+    [ -z "$service" ] && service="%E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91"
 
     if do_auth "$AUTH_URL" "$username" "$password" "$service"; then
         case "$AUTH_URL" in
