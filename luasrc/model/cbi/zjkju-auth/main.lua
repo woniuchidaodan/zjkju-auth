@@ -37,20 +37,22 @@ if current ~= "" and current ~= "%E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91" 
 	o:value(current, current .. translate("（当前已保存）"))
 end
 
--- 手动认证地址：去掉 o.optional，直接显示
 o = s:option(Value, "manual_url", translate("手动认证地址"),
-	translate("留空表示自动探测。只有自动获取失败时才需要填完整认证页地址"))
+	translate("通常留空。只有自动抓取和缓存都失败时才会用到这个地址"))
 o.datatype = "string"
 o.rmempty = true
 
--- 日志文件（只读）
 o = s:option(DummyValue, "_log_location", translate("日志文件"))
 o.rawhtml = true
 o.default = "<code>/var/log/zjkju-auth.log</code>"
 o.description = translate("默认 /var/log/zjkju-auth.log（内存盘，重启清空）。想重启后保留可改成 /etc/zjkju-auth.log")
 
--- 运行日志区
 local sec = m:section(SimpleSection)
 sec.template = "zjkju-auth/log"
+
+-- 保存后重启服务，让 enabled 等改动立即生效
+function m.on_after_commit(self)
+	luci.sys.call("/etc/init.d/zjkju-auth restart >/dev/null 2>&1")
+end
 
 return m
