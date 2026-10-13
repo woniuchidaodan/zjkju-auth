@@ -4,15 +4,15 @@ local uci       = require("luci.model.uci").cursor()
 local m, s, o
 
 m = Map("zjkju-auth", translate("ZJKJU 校园网认证"),
-	translate("在路由器上自动完成校园网 ePortal 认证。修改后请点击“保存并应用”，服务会立即重启。"))
+	translate("在路由器上自动完成校园网 ePortal 认证。填写学号和密码后，勾选“启用认证”并保存。"))
 
 s = m:section(NamedSection, "main", "zjkju-auth", translate("认证设置"))
 s.anonymous = true
 s.addremove = false
 
 o = s:option(Flag, "enabled", translate("启用认证"),
-	translate("勾选并保存后，开机自动启动认证服务"))
-o.default = 1
+	translate("勾选并保存后，服务会立即启动；取消勾选保存会停止服务"))
+o.default = 0
 o.rmempty = false
 
 o = s:option(Value, "username", translate("学号"),
@@ -50,9 +50,22 @@ o.description = translate("默认 /var/log/zjkju-auth.log（内存盘，重启�
 local sec = m:section(SimpleSection)
 sec.template = "zjkju-auth/log"
 
--- 保存后重启服务，让 enabled 等改动立即生效
+-- 保存后根据 enabled 状态决定启动/停止
+-- 用 enable/stop/sleep/start 分步执行，避免 procd 在 restart 时读到旧状态
 function m.on_after_commit(self)
-	luci.sys.call("/etc/init.d/zjkju-auth restart >/dev/null 2>&1")
+	local uci2 = require("luci.model.uci").cursor()
+	local enabled = uci2:get("zjkju-auth", "main", "enabled")
+
+	if enabled == "1" then
+		luci.sys.call("/etc/init.d/zjkju-auth enable >/dev/null 2>&1")
+		luci.sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
+		-- 延迟 1 秒让 procd 完成清理，再 start
+		-- 用 & 让 LuCI 请求立即返回，不阻塞用户
+		luci.sys.call("(sleep 1; /etc/init.d/zjkju-auth start) >/dev/null 2>&1 &")
+	else
+		luci.sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
+		luci.sys.call("/etc/init.d/zjkju-auth disable >/dev/null 2>&1")
+	end
 end
 
 return m
