@@ -1,5 +1,5 @@
 config zjkju-auth 'main'
-	option enabled '1'
+	option enabled '0'
 	option username ''
 	option password ''
 	option service '%E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91'
