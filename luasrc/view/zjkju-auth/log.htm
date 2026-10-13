@@ -10,7 +10,6 @@ end
 if not log or log == "" then
 	log = "（暂无日志，服务可能还未启动过）"
 else
-	-- 只取最后 100 行
 	local lines = {}
 	for line in (log .. "\n"):gmatch("(.-)\n") do
 		if line ~= "" then lines[#lines + 1] = line end
@@ -23,9 +22,7 @@ end
 %>
 
 <style>
-.zjkju-wrapper {
-	padding: 20px;
-}
+.zjkju-wrapper { padding: 20px; }
 .zjkju-toolbar {
 	display: flex;
 	justify-content: space-between;
@@ -46,11 +43,7 @@ end
 	gap: 8px;
 	flex-wrap: wrap;
 }
-.zjkju-label {
-	color: #666;
-	font-size: 13px;
-	font-weight: 500;
-}
+.zjkju-label { color: #666; font-size: 13px; font-weight: 500; }
 .zjkju-badge {
 	display: inline-block;
 	padding: 3px 10px;
@@ -59,15 +52,12 @@ end
 	font-weight: 500;
 	color: #fff;
 }
-.zjkju-badge-online  { background: #27ae60; }
-.zjkju-badge-offline { background: #e74c3c; }
-.zjkju-badge-unknown { background: #95a5a6; }
-.zjkju-badge-stopped { background: #7f8c8d; }
-.zjkju-status-time {
-	font-size: 12px;
-	color: #888;
-	white-space: nowrap;
-}
+.zjkju-badge-online   { background: #27ae60; }
+.zjkju-badge-offline  { background: #e74c3c; }
+.zjkju-badge-unknown  { background: #95a5a6; }
+.zjkju-badge-stopped  { background: #7f8c8d; }
+.zjkju-badge-disabled { background: #6c757d; }
+.zjkju-status-time { font-size: 12px; color: #888; white-space: nowrap; }
 .zjkju-log-box {
 	background: #1e1e1e;
 	color: #d4d4d4;
@@ -101,42 +91,17 @@ end
 	transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 	user-select: none;
 }
-.zjkju-btn:hover {
-	background: #1c6dd0;
-	box-shadow: 0 4px 10px rgba(47, 128, 237, 0.35);
-	transform: translateY(-1px);
-}
-.zjkju-btn:active {
-	background: #155bb5;
-	box-shadow: 0 1px 2px rgba(47, 128, 237, 0.3);
-	transform: translateY(0);
-}
-.zjkju-btn:focus {
-	outline: none;
-	box-shadow: 0 0 0 3px rgba(47, 128, 237, 0.25);
-}
-.zjkju-btn-danger {
-	background: #e74c3c;
-	box-shadow: 0 1px 3px rgba(231, 76, 60, 0.2);
-}
-.zjkju-btn-danger:hover {
-	background: #c0392b;
-	box-shadow: 0 4px 10px rgba(231, 76, 60, 0.35);
-	transform: translateY(-1px);
-}
-.zjkju-btn-danger:active {
-	background: #a93226;
-	box-shadow: 0 1px 2px rgba(231, 76, 60, 0.3);
-	transform: translateY(0);
-}
-.zjkju-btn-danger:focus {
-	box-shadow: 0 0 0 3px rgba(231, 76, 60, 0.25);
-}
+.zjkju-btn:hover { background: #1c6dd0; box-shadow: 0 4px 10px rgba(47, 128, 237, 0.35); transform: translateY(-1px); }
+.zjkju-btn:active { background: #155bb5; box-shadow: 0 1px 2px rgba(47, 128, 237, 0.3); transform: translateY(0); }
+.zjkju-btn:focus { outline: none; box-shadow: 0 0 0 3px rgba(47, 128, 237, 0.25); }
+.zjkju-btn-danger { background: #e74c3c; box-shadow: 0 1px 3px rgba(231, 76, 60, 0.2); }
+.zjkju-btn-danger:hover { background: #c0392b; box-shadow: 0 4px 10px rgba(231, 76, 60, 0.35); transform: translateY(-1px); }
+.zjkju-btn-danger:active { background: #a93226; box-shadow: 0 1px 2px rgba(231, 76, 60, 0.3); transform: translateY(0); }
+.zjkju-btn-danger:focus { box-shadow: 0 0 0 3px rgba(231, 76, 60, 0.25); }
 </style>
 
 <div class="cbi-section">
 	<div class="zjkju-wrapper">
-
 		<div class="zjkju-toolbar">
 			<div class="zjkju-toolbar-left">
 				<span class="zjkju-label"><%:当前状态%>:</span>
@@ -151,7 +116,6 @@ end
 				<button class="zjkju-btn zjkju-btn-danger" onclick="zjkjuClearLog()"><%:清空日志%></button>
 			</div>
 		</div>
-
 		<pre class="zjkju-log-box" id="zjkju-log"><%=pcdata(log)%></pre>
 	</div>
 </div>
@@ -209,8 +173,13 @@ end
 					setBadge(daemonBadge, '<%:未运行%>', 'zjkju-badge-stopped');
 				}
 
-				if (!data.running) {
-					setBadge(netBadge, '<%:未知%>', 'zjkju-badge-unknown');
+				// 先判 enabled（UCI 里），再判运行/在线
+				if (data.enabled !== "1") {
+					setBadge(netBadge, '<%:已禁用%>', 'zjkju-badge-disabled');
+				} else if (!data.running) {
+					setBadge(netBadge, '<%:未运行%>', 'zjkju-badge-stopped');
+				} else if (data.status === 'noconfig') {
+					setBadge(netBadge, '<%:未配置%>', 'zjkju-badge-unknown');
 				} else if (data.online) {
 					setBadge(netBadge, '<%:在线%>', 'zjkju-badge-online');
 				} else {
