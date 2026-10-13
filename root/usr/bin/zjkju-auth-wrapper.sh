@@ -9,11 +9,14 @@ LOG_FILE="/var/log/zjkju-auth.log"
 LOG_MAX_KB=256
 
 # 失败熔断
-FAIL_COUNT=0       # 认证明确失败（RC=1/2）
-PENDING_COUNT=0    # 认证返回成功但探测仍离线（网关观察期）
+FAIL_COUNT=0       # 认证明确失败（RC=1/2）的连续次数
+PENDING_COUNT=0    # 认证返回成功但探测仍离线（网关观察期）的连续次数
 MAX_FAIL=3
 COOLDOWN_SEC=300
 COOLDOWN_CHECK_INTERVAL=10
+
+# 未配置状态日志去重（避免 5 秒一轮刷屏）
+NOCONFIG_LOGGED=0
 
 . /lib/functions.sh
 
@@ -29,6 +32,7 @@ log_msg() {
     logger -t zjkju-auth "$1"
 }
 
+# 写状态文件，供 LuCI 的 /status 直接读取（避免每次轮询 fork 一次 curl）
 set_status() {
     echo "$1" > "$STATUS_FILE"
 }
@@ -60,6 +64,7 @@ is_online() {
     [ "$BODY" = "Microsoft Connect Test" ]
 }
 
+# HTML 实体解码：锐捷门户跳转 URL 里的 & 常被写成 &amp;
 html_decode() {
     echo "$1" | sed 's/&amp;/\&/g; s/&lt;/</g; s/&gt;/>/g; s/&quot;/"/g; s/&#39;/'"'"'/g'
 }
@@ -110,8 +115,9 @@ fetch_auth_url_cache() {
     return 1
 }
 
-# 优先级：自动 → 缓存 → 手动兜底
-# 项目设计前提是"不要固定 URL"，手动 URL 是最后的逃生口
+# 优先级：自动抓取 → 缓存 → 手动 URL 兜底
+# 项目设计前提就是"不要固定 URL"（wlanuserip 等参数会随会话变化），
+# 所以每次掉线都重新抓取；手动 URL 只作为最后的逃生口。
 fetch_auth_url() {
     URL=$(fetch_auth_url_auto)
     [ -n "$URL" ] && { echo "$URL"; return 0; }
@@ -130,9 +136,9 @@ urlencode_query() {
 }
 
 # 返回值:
-#   0 = 成功
-#   1 = 业务失败（网关明确返回 fail）
-#   2 = 无法判定（网络波动/响应异常）
+#   0 = 网关明确返回 success
+#   1 = 网关明确返回 fail（账号/密码/服务类型问题）
+#   2 = 无法判定（网络波动、响应异常、URL 无效）—— 同样计入熔断
 do_auth() {
     AUTH_URL="$1"
     USERNAME="$2"
@@ -238,10 +244,17 @@ while true; do
 
     if [ -z "$username" ] || [ -z "$password" ]; then
         set_status "noconfig"
-        log_msg "未配置学号/密码，等待用户在 LuCI 界面填写"
-        sleep 30
+        # 只在进入"未配置"状态时记一条，避免每轮刷屏
+        # （每 5 秒一条会很快冲掉 syslog 里其他服务的日志）
+        if [ "$NOCONFIG_LOGGED" != "1" ]; then
+            log_msg "未配置学号/密码，等待用户在 LuCI 界面填写"
+            NOCONFIG_LOGGED=1
+        fi
+        sleep 5
         continue
     fi
+
+    NOCONFIG_LOGGED=0
 
     # ============ 在线 ============
     if is_online; then
@@ -293,7 +306,7 @@ while true; do
     RC=$?
 
     if [ "$RC" = "0" ]; then
-        # 认证成功：缓存 URL
+        # 认证成功：缓存本次 URL
         case "$AUTH_URL" in
             *wlanuserip=*)
                 echo "$AUTH_URL" > "$CACHE_FILE"
@@ -301,8 +314,9 @@ while true; do
         esac
         FAIL_COUNT=0
 
-        # A4 真修：认证返回 success 但探测仍离线（网关观察期）
-        # 用 PENDING_COUNT 计数，达到阈值也冷却
+        # 认证返回 success 但探测仍判离线（网关观察期）。
+        # 用独立的 PENDING_COUNT 计数，退避 15 → 30，第 3 次同样转入冷却，
+        # 避免在网关放行前反复重发认证请求。
         PENDING_COUNT=$((PENDING_COUNT + 1))
         if [ "$PENDING_COUNT" -ge "$MAX_FAIL" ]; then
             log_msg "连续 ${PENDING_COUNT} 次认证返回成功但仍离线，冷却 ${COOLDOWN_SEC} 秒（可能是网关观察期）"
@@ -312,12 +326,11 @@ while true; do
             continue
         fi
 
-        # 指数退避：15 → 30 → 60 → 120（上限）
         RETRY_DELAY=$((15 * PENDING_COUNT))
         [ "$RETRY_DELAY" -gt 120 ] && RETRY_DELAY=120
 
     else
-        # RC=1（明确失败）和 RC=2（响应无法识别）都计入 FAIL_COUNT
+        # RC=1（明确失败）与 RC=2（响应无法识别）都计入 FAIL_COUNT
         PENDING_COUNT=0
         FAIL_COUNT=$((FAIL_COUNT + 1))
 
