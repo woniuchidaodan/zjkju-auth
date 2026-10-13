@@ -1,6 +1,7 @@
 module("luci.controller.zjkju-auth", package.seeall)
 
 local LOG_FILE = "/var/log/zjkju-auth.log"
+local STATUS_FILE = "/tmp/zjkju-auth-status"
 
 function index()
 	if not nixio.fs.access("/etc/config/zjkju-auth") then
@@ -41,27 +42,20 @@ function action_get_log()
 		return
 	end
 
-	-- 太大时只取最后 100KB，避免把路由器内存吃光
 	if #data > 100 * 1024 then
 		data = data:sub(-(100 * 1024))
-		-- 从第一个换行开始，避免半行
 		local nl = data:find("\n")
 		if nl then data = data:sub(nl + 1) end
 	end
 
-	-- 取最后 100 行
 	local lines = {}
 	for line in (data .. "\n"):gmatch("(.-)\n") do
-		if line ~= "" then
-			lines[#lines + 1] = line
-		end
+		if line ~= "" then lines[#lines + 1] = line end
 	end
 
 	local start = math.max(1, #lines - 100 + 1)
 	local buf = {}
-	for i = start, #lines do
-		buf[#buf + 1] = lines[i]
-	end
+	for i = start, #lines do buf[#buf + 1] = lines[i] end
 
 	http.write(table.concat(buf, "\n"))
 end
@@ -83,8 +77,13 @@ function action_clear_log()
 	http.write('{"ok":true}')
 end
 
+-- 不 fork curl，直接读 wrapper 写的状态文件 + UCI enabled
 function action_status()
 	local sys = require "luci.sys"
+	local fs = require "nixio.fs"
+	local uci = require("luci.model.uci").cursor()
+
+	local enabled = uci:get("zjkju-auth", "main", "enabled") or "0"
 
 	local running = false
 	local pid = sys.exec("pidof zjkju-auth-wrapper.sh 2>/dev/null")
@@ -95,19 +94,17 @@ function action_status()
 		running = true
 	end
 
-	local online = false
-	local body = sys.exec("/usr/bin/curl -s --max-time 5 'http://www.msftconnecttest.com/connecttest.txt' 2>/dev/null")
-	if body then
-		body = body:gsub("%s+", "")
-		if body:find("MicrosoftConnectTest", 1, true) then
-			online = true
-		end
+	local status = ""
+	if fs.access(STATUS_FILE) then
+		status = (fs.readfile(STATUS_FILE) or ""):gsub("%s+", "")
 	end
 
 	luci.http.prepare_content("application/json; charset=utf-8")
 	luci.http.write_json({
+		enabled = enabled,
 		running = running,
-		online = online,
+		online = (status == "online"),
+		status = status,
 		ts = os.time()
 	})
 end
