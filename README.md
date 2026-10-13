@@ -382,7 +382,7 @@ AUTH_SERVER="http://你们学校的认证服务器IP"
 
 ## 📄 许可证
 
-本项目采用 **GNU General Public License v2.0**（GPL-2.0）许可证，详见 [LICENSE](./LICENSE) 文件。
+本项目采用 **GNU General Public License v3.0**（GPL-3.0）许可证，详见 [LICENSE](./LICENSE) 文件。
 
 ### 上游来源声明
 
