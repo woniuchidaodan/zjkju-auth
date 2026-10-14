@@ -168,9 +168,10 @@ wrapper started
 
 ### 三层 URL 兜底
 
-1. **手动 URL**：若用户在 LuCI 中填写了手动 URL，优先使用
-2. **自动抓取**：访问普通外网（baidu/example/qualcomm），从 302 响应中提取带 `wlanuserip` 的认证页 URL
-3. **缓存兜底**：使用上次认证成功时缓存的 URL
+1. **自动抓取**：访问普通外网（baidu/example/qualcomm/neverssl/qq），从 302 响应中提取带 `wlanuserip` 的认证页 URL
+2. **缓存兜底**：使用上次认证成功时缓存的 URL（存在 `/tmp/zjkju-auth-last-url`）
+3. **手动 URL**：只有前两层都失败时，才使用 LuCI 里填的手动 URL
+
 
 ### 为什么不用 `-e` 持久化模式？
 
