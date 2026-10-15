@@ -45,8 +45,8 @@
 
 | 文件名 | 适用系统 | 架构 |
 |--------|----------|------|
-| luci-app-zjkju-auth_all.ipk | OpenWrt / ImmortalWrt 21.02 ~ 24.10 | **全架构** |
-| luci-app-zjkju-auth.apk | OpenWrt / ImmortalWrt 12.12+ | **全架构** |
+| luci-app-zjkju-auth_*all.ipk | OpenWrt / ImmortalWrt 21.02 ~ 24.10 | **全架构** |
+| luci-app-zjkju-auth_*.apk | OpenWrt / ImmortalWrt 12.12+ | **全架构** |
 
 ## 🚀 安装
 
