@@ -389,7 +389,7 @@ AUTH_SERVER="http://你们学校的认证服务器IP"
 
 - 核心认证逻辑来自 [Micro-Cnhua/Ruijie_Porta_Auth](https://github.com/Micro-Cnhua/Ruijie_Porta_Auth)
 - 上游参考了 [Turris-Babel/school_ruijie](https://github.com/Turris-Babel/school_ruijie)
-- 上游未声明许可证，本项目自主选择 GPL-2.0，并保留上游版权声明
+- 上游未声明许可证，本项目自主选择 GPL-3.0，并保留上游版权声明
 
 ## ⚠️ 免责声明
 
