@@ -393,5 +393,5 @@ AUTH_SERVER="http://你们学校的认证服务器IP"
 - 密码保存在路由器 `/etc/config/zjkju-auth` 中（权限 600，仅 root 可读），请确保路由器安全
 
 ## 后记
-精选流量卡
-（https://lm3.cn/PMwtA）
+精选流量卡：
+https://lm3.cn/PMwtA
