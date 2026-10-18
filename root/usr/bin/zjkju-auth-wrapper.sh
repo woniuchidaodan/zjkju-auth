@@ -14,18 +14,24 @@ CACHE_EXPIRE_SEC=21600
 
 mkdir -p "$STATE_DIR"
 
-# 失败熔断（密码错误等）
+# 1. 业务失败（密码错误等）：固定冷却
 FAIL_COUNT=0
-PENDING_COUNT=0        # 认证返回成功但探测仍离线（网关观察期）
 MAX_FAIL=3
 FAIL_COOLDOWN_SEC=300
 
-# 认证超时/响应异常冷却（线性递增，带封顶）
+# 2. 假成功（网关观察期）冷却：线性递增，带封顶
+PENDING_COUNT=0
+MAX_PENDING=3
+PENDING_COOLDOWN_INIT=300
+PENDING_COOLDOWN_CURRENT=300
+
+# 3. 认证超时/响应异常冷却：线性递增，带封顶
 TIMEOUT_COUNT=0
 MAX_TIMEOUT=3
 TIMEOUT_COOLDOWN_INIT=300
 TIMEOUT_COOLDOWN_CURRENT=300
 MAX_COOLDOWN=1800      # 封顶 30 分钟
+
 COOLDOWN_CHECK_INTERVAL=10
 
 # 未配置状态日志去重（避免 5 秒一轮刷屏）
@@ -110,6 +116,10 @@ urlencode_query() {
     echo "$1" | sed 's/=/\%3D/g; s/&/\%26/g'
 }
 
+# 返回值:
+#   0 = 网关明确返回 success
+#   1 = 网关明确返回 fail（账号/密码/服务类型问题）
+#   2 = 无法判定（网络波动、响应异常、URL 无效）
 do_auth() {
     AUTH_URL="$1"; USERNAME="$2"; PASSWORD="$3"; SERVICE="$4"
     QUERY_STRING="${AUTH_URL#*\?}"
@@ -123,6 +133,7 @@ do_auth() {
     log_msg "用户名: $USERNAME"
     log_msg "认证地址: $AUTH_URL"
 
+    # 路径必须是 /eportal/（全小写）：写成 /ePortal/ 会 404，认证永远不成功
     RESPONSE=$(curl -s --max-time 10 -X POST "$AUTH_SERVER/eportal/InterFace.do?method=login" \
         -H "Content-Type: application/x-www-form-urlencoded; charset=UTF-8" \
         -H "User-Agent: $UA" -H "Referer: $AUTH_URL" -H "Origin: $AUTH_SERVER" \
@@ -143,6 +154,9 @@ do_auth() {
     esac
 }
 
+# 冷却等待：每 COOLDOWN_CHECK_INTERVAL 秒检查网络和配置，任一变化立即返回。
+# 用 date +%s 算真实经过时间（is_online 本身可能耗时数秒，累加 sleep 会把冷却拖长）。
+# 进入时写 status=cooling，供 LuCI 显示「冷却中」。
 cooldown_wait() {
     local cur_user="$1"
     local cur_pass="$2"
@@ -150,11 +164,14 @@ cooldown_wait() {
     local deadline
     deadline=$(( $(date +%s) + wait_sec ))
 
+    set_status "cooling"
+
     while :; do
         sleep "$COOLDOWN_CHECK_INTERVAL"
 
         if is_online; then
             log_msg "冷却期间检测到网络已恢复，提前结束冷却"
+            set_status "online"
             return 0
         fi
 
@@ -164,6 +181,7 @@ cooldown_wait() {
         config_get new_pass main password
         if [ "$new_user" != "$cur_user" ] || [ "$new_pass" != "$cur_pass" ]; then
             log_msg "检测到账号/密码已修改，提前结束冷却"
+            set_status "offline"
             return 0
         fi
 
@@ -171,6 +189,7 @@ cooldown_wait() {
     done
 
     log_msg "冷却结束，恢复认证尝试"
+    set_status "offline"
     return 0
 }
 
@@ -198,6 +217,7 @@ while true; do
     fi
     NOCONFIG_LOGGED=0
 
+    # 清理存活过久的缓存 URL
     if [ -f "$CACHE_FILE" ]; then
         NOW=$(date +%s); FILE_TIME=$(date -r "$CACHE_FILE" +%s 2>/dev/null)
         if [ -n "$FILE_TIME" ] && [ "$FILE_TIME" -gt 0 ] 2>/dev/null; then
@@ -219,7 +239,11 @@ while true; do
             touch "$ONLINE_FLAG"
         fi
         STATE="online"; EVER_ONLINE=1; FAIL_COUNT=0; PENDING_COUNT=0; TIMEOUT_COUNT=0
+
+        # 网络恢复后，各冷却时间都回到初始值
         TIMEOUT_COOLDOWN_CURRENT=$TIMEOUT_COOLDOWN_INIT
+        PENDING_COOLDOWN_CURRENT=$PENDING_COOLDOWN_INIT
+
         sleep "$check_interval"; continue
     fi
 
@@ -228,6 +252,7 @@ while true; do
 
     AUTH_URL=$(fetch_auth_url)
     if [ -z "$AUTH_URL" ]; then
+        # 抓不到认证页时短重试，不进入长冷却
         sleep 10
         continue
     fi
@@ -248,16 +273,23 @@ while true; do
     if [ "$RC" = "0" ]; then
         case "$AUTH_URL" in *wlanuserip=*) echo "$AUTH_URL" > "$CACHE_FILE" ;; esac
         FAIL_COUNT=0; TIMEOUT_COUNT=0
+
         PENDING_COUNT=$((PENDING_COUNT + 1))
-        if [ "$PENDING_COUNT" -ge "$MAX_FAIL" ]; then
-            log_msg "连续 ${PENDING_COUNT} 次认证返回成功但仍离线，冷却 ${FAIL_COOLDOWN_SEC} 秒"
-            cooldown_wait "$username" "$password" "$FAIL_COOLDOWN_SEC"
+
+        if [ "$PENDING_COUNT" -ge "$MAX_PENDING" ]; then
+            log_msg "连续 ${PENDING_COUNT} 次认证返回成功但仍离线，冷却 ${PENDING_COOLDOWN_CURRENT} 秒（可能是网关观察期）"
+            cooldown_wait "$username" "$password" "$PENDING_COOLDOWN_CURRENT"
+
+            PENDING_COOLDOWN_CURRENT=$((PENDING_COOLDOWN_CURRENT + 300))
+            [ "$PENDING_COOLDOWN_CURRENT" -gt "$MAX_COOLDOWN" ] && PENDING_COOLDOWN_CURRENT=$MAX_COOLDOWN
+
             PENDING_COUNT=0; sleep "$check_interval"; continue
         fi
         RETRY_DELAY=$((15 * PENDING_COUNT)); [ "$RETRY_DELAY" -gt 120 ] && RETRY_DELAY=120
     else
         PENDING_COUNT=0
 
+        # 只有 RC=2（请求异常）才清缓存；RC=1 是密码/服务类型问题，缓存仍然有效
         if [ "$RC" = "2" ] && [ -f "$CACHE_FILE" ]; then
             CACHED_URL=$(cat "$CACHE_FILE" 2>/dev/null)
             if [ "$CACHED_URL" = "$AUTH_URL" ]; then
