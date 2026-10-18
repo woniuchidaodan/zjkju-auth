@@ -123,7 +123,7 @@ opkg install luci-compat curl
 | **重启服务** | 重启认证服务，冷却中的失败计数会清零 |
 | **清空日志** | 一键清空日志文件 |
 
-**日志文件位置**：`/var/log/zjkju-auth.log`（内存盘，重启清空）
+**日志文件位置**：`/var/log/zjkju-auth/auth.log`
 
 
 联网在线时：
