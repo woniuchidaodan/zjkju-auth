@@ -15,7 +15,7 @@ define Package/luci-app-zjkju-auth/postinst
 #!/bin/sh
 [ -z "$${IPKG_INSTROOT}" ] || exit 0
 
-# B1: 仅在配置文件不存在时写入（避免升级时抹掉用户的学号/密码）
+# 仅在配置文件不存在时写入（避免升级时抹掉用户的学号/密码）
 [ -f /etc/config/zjkju-auth ] || cat > /etc/config/zjkju-auth <<EOF
 config zjkju-auth 'main'
 	option enabled '0'
@@ -26,7 +26,7 @@ config zjkju-auth 'main'
 	option manual_url ''
 EOF
 
-# B3: 强制权限为 600，保护密码安全
+# 强制权限为 600，保护密码安全
 # libuci 写盘时会先 chmod 成原文件权限再 rename，所以这个 600 会一直保持
 chmod 600 /etc/config/zjkju-auth
 
@@ -37,8 +37,7 @@ rm -f /tmp/zjkju-auth-last-url
 rm -f /tmp/zjkju-auth-online-printed
 mkdir -p /var/log/zjkju-auth
 
-# B2: 补回 luci.mk 默认 postinst 的缓存清理逻辑
-# （自定义 postinst 会顶掉 luci.mk 里 ifndef 包裹的默认实现）
+# 补回 luci.mk 默认 postinst 的缓存清理逻辑（自定义 postinst 会顶掉默认实现）
 rm -f /tmp/luci-indexcache.*
 rm -rf /tmp/luci-modulecache/
 /etc/init.d/rpcd reload 2>/dev/null
