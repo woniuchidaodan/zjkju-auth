@@ -21,7 +21,7 @@ o.default = 0
 o.rmempty = false
 
 o = s:option(Value, "username", translate("用户名"),
-	translate("校园网账号，一般为学号，如果是新生且无学号，用户名一般为ZK开头的临时账号"))
+	translate("用户名，一般为学号，如果是新生且无学号，用户名一般为ZK开头的临时账号"))
 o.datatype = "string"
 o.rmempty = false
 
