@@ -3,7 +3,12 @@ local uci       = require("luci.model.uci").cursor()
 
 local m, s, o
 
-m = Map("zjkju-auth", translate("ZJKJU 校园网认证"),
+-- 定义当前软件包版本号
+local PKG_VERSION = "1.0.3"
+
+-- 在标题后追加带样式的版本号
+m = Map("zjkju-auth", 
+	translate("ZJKJU 校园网认证") .. " <span style='font-size:12px; color:#888; font-weight:normal; margin-left:8px;'>Version: " .. PKG_VERSION .. "</span>",
 	translate("在路由器上自动完成校园网 ePortal 认证。填写学号和密码后，勾选“启用”并保存。"))
 
 s = m:section(NamedSection, "main", "zjkju-auth", translate("认证设置"))
@@ -16,7 +21,7 @@ o.default = 0
 o.rmempty = false
 
 o = s:option(Value, "username", translate("用户名"),
-	translate("校园网账号，一般为学号，如果是新生且无学号，用户名一般为ZK开头的临时账号"))
+	translate("用户名，一般为学号，如果是新生且无学号，用户名一般为ZK开头的临时账号"))
 o.datatype = "string"
 o.rmempty = false
 
