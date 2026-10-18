@@ -1,6 +1,6 @@
 <%
 local fs = require "nixio.fs"
-local logfile = "/var/log/zjkju-auth.log"
+local logfile = "/var/log/zjkju-auth/auth.log"
 local log = ""
 
 if fs.access(logfile) then
@@ -10,6 +10,7 @@ end
 if not log or log == "" then
 	log = "（暂无日志，服务可能还未启动过）"
 else
+	-- 只取最后 100 行
 	local lines = {}
 	for line in (log .. "\n"):gmatch("(.-)\n") do
 		if line ~= "" then lines[#lines + 1] = line end
@@ -173,7 +174,7 @@ end
 					setBadge(daemonBadge, '<%:未运行%>', 'zjkju-badge-stopped');
 				}
 
-				// 先判 enabled（UCI 里），再判运行/在线
+				// enabled 先判：关掉开关后服务不会启动，只看 running 会显示"未知"
 				if (data.enabled !== "1") {
 					setBadge(netBadge, '<%:已禁用%>', 'zjkju-badge-disabled');
 				} else if (!data.running) {
