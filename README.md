@@ -1,3 +1,8 @@
+<p align="center">
+  <img width="356" height="95" alt="logo" src="https://github.com/user-attachments/assets/032c1dcc-4476-4171-8a3a-d2fb33adc8c4" />
+</p>
+
+
 # LuCI App - 湛江科技学院锐捷校园网自动认证 (luci-app-zjkju-auth)
 
 一个用于 ImmortalWrt / OpenWrt 的 LuCI 应用，在后台自动完成湛江科技学院锐捷 ePortal Web 认证，支持断线自动重连、开机自启、Web 界面配置。
