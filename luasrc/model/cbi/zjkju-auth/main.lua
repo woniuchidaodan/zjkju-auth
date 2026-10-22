@@ -36,12 +36,12 @@ o.default = 0
 o.rmempty = false
 
 o = s:taboption("basic", Value, "username", translate("用户名"),
-	translate("校园网账号，一般为学号，如果是新生且无学号，用户名一般为ZK开头的临时账号"))
+	translate("用户名，一般为学号，如果是新生且无学号，用户名一般为ZK开头的临时账号"))
 o.datatype = "string"
 o.rmempty = false
 
 o = s:taboption("basic", Value, "password", translate("密码"),
-	translate("校园网密码，初始为身份证后六位"))
+	translate("密码，初始为身份证后六位"))
 o.password = true
 o.datatype = "string"
 o.rmempty = false
@@ -66,7 +66,7 @@ o.rmempty = true
 o = s:taboption("other", DummyValue, "_log_location", translate("日志文件"))
 o.rawhtml = true
 o.default = "<code>/var/log/zjkju-auth/auth.log</code>"
-o.description = translate("默认 /var/log/zjkju-auth/auth.log（内存盘，重启清空）。同目录下还有 status、last-url 等运行时文件")
+o.description = translate("默认 /var/log/zjkju-auth/auth.log。同目录下还有 status、last-url 等运行时文件")
 
 local checkUrl    = disp.build_url("admin", "services", "zjkju-auth", "check_update")
 local doUpdateUrl = disp.build_url("admin", "services", "zjkju-auth", "do_update")
