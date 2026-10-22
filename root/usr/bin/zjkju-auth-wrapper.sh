@@ -3,7 +3,6 @@
 AUTH_SERVER="http://10.80.80.249"
 UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-# 统一集中目录
 STATE_DIR="/var/log/zjkju-auth"
 LOG_FILE="$STATE_DIR/auth.log"
 CACHE_FILE="$STATE_DIR/last-url"
@@ -34,7 +33,6 @@ MAX_COOLDOWN=1800      # 封顶 30 分钟
 
 COOLDOWN_CHECK_INTERVAL=10
 
-# 未配置状态日志去重（避免 5 秒一轮刷屏）
 NOCONFIG_LOGGED=0
 
 . /lib/functions.sh
@@ -50,6 +48,12 @@ log_msg() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOG_FILE"
     logger -t zjkju-auth "$1"
 }
+
+# ==========================================
+# 核心改进：捕获系统终止信号，实现瞬间退出
+# 这样重启服务或更新时，procd 不需要强行等待 sleep 结束
+# ==========================================
+trap 'log_msg "收到停止信号，服务退出"; exit 0' TERM INT
 
 set_status() { echo "$1" > "$STATUS_FILE"; }
 log_msg "wrapper started"
@@ -116,10 +120,6 @@ urlencode_query() {
     echo "$1" | sed 's/=/\%3D/g; s/&/\%26/g'
 }
 
-# 返回值:
-#   0 = 网关明确返回 success
-#   1 = 网关明确返回 fail（账号/密码/服务类型问题）
-#   2 = 无法判定（网络波动、响应异常、URL 无效）
 do_auth() {
     AUTH_URL="$1"; USERNAME="$2"; PASSWORD="$3"; SERVICE="$4"
     QUERY_STRING="${AUTH_URL#*\?}"
@@ -133,7 +133,7 @@ do_auth() {
     log_msg "用户名: $USERNAME"
     log_msg "认证地址: $AUTH_URL"
 
-    # 路径必须是 /eportal/（全小写）：写成 /ePortal/ 会 404，认证永远不成功
+    # 路径必须是 /eportal/（全小写）：写成 /ePortal/ 会 404
     RESPONSE=$(curl -s --max-time 10 -X POST "$AUTH_SERVER/eportal/InterFace.do?method=login" \
         -H "Content-Type: application/x-www-form-urlencoded; charset=UTF-8" \
         -H "User-Agent: $UA" -H "Referer: $AUTH_URL" -H "Origin: $AUTH_SERVER" \
@@ -154,9 +154,6 @@ do_auth() {
     esac
 }
 
-# 冷却等待：每 COOLDOWN_CHECK_INTERVAL 秒检查网络和配置，任一变化立即返回。
-# 用 date +%s 算真实经过时间（is_online 本身可能耗时数秒，累加 sleep 会把冷却拖长）。
-# 进入时写 status=cooling，供 LuCI 显示「冷却中」。
 cooldown_wait() {
     local cur_user="$1"
     local cur_pass="$2"
@@ -217,7 +214,6 @@ while true; do
     fi
     NOCONFIG_LOGGED=0
 
-    # 清理存活过久的缓存 URL
     if [ -f "$CACHE_FILE" ]; then
         NOW=$(date +%s); FILE_TIME=$(date -r "$CACHE_FILE" +%s 2>/dev/null)
         if [ -n "$FILE_TIME" ] && [ "$FILE_TIME" -gt 0 ] 2>/dev/null; then
@@ -240,7 +236,6 @@ while true; do
         fi
         STATE="online"; EVER_ONLINE=1; FAIL_COUNT=0; PENDING_COUNT=0; TIMEOUT_COUNT=0
 
-        # 网络恢复后，各冷却时间都回到初始值
         TIMEOUT_COOLDOWN_CURRENT=$TIMEOUT_COOLDOWN_INIT
         PENDING_COOLDOWN_CURRENT=$PENDING_COOLDOWN_INIT
 
@@ -250,20 +245,31 @@ while true; do
     set_status "offline"
     rm -f "$ONLINE_FLAG"
 
+    # ============ 断网防抖确认机制 ============
+    if [ "$STATE" = "online" ]; then
+        log_msg "检测到断网，等待 10 秒防抖确认..."
+        sleep 10
+
+        if is_online; then
+            log_msg "网络已闪断恢复，取消本次认证"
+            STATE="online"
+            touch "$ONLINE_FLAG"
+            set_status "online"
+            sleep "$check_interval"
+            continue
+        fi
+        log_msg "确认网络已彻底断开，开始尝试重新认证"
+    elif [ "$STATE" != "offline" ]; then
+        # 走到这里 STATE 只可能是 init（online 已被上面分支处理），EVER_ONLINE 必为 0
+        log_msg "网络未连接，开始认证"
+    fi
+    STATE="offline"
+    # =================================================
+
     AUTH_URL=$(fetch_auth_url)
     if [ -z "$AUTH_URL" ]; then
-        # 抓不到认证页时短重试，不进入长冷却
         sleep 10
         continue
-    fi
-
-    if [ "$STATE" != "offline" ]; then
-        if [ "$EVER_ONLINE" = "1" ]; then
-            log_msg "网络已断开，开始尝试重新认证"
-        else
-            log_msg "网络未连接，开始认证"
-        fi
-        STATE="offline"
     fi
 
     [ -z "$service" ] && service="%E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91"
@@ -289,7 +295,6 @@ while true; do
     else
         PENDING_COUNT=0
 
-        # 只有 RC=2（请求异常）才清缓存；RC=1 是密码/服务类型问题，缓存仍然有效
         if [ "$RC" = "2" ] && [ -f "$CACHE_FILE" ]; then
             CACHED_URL=$(cat "$CACHE_FILE" 2>/dev/null)
             if [ "$CACHED_URL" = "$AUTH_URL" ]; then
