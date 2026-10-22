@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-zjkju-auth
-PKG_VERSION:=1.0.3
+PKG_VERSION:=1.0.4
 PKG_RELEASE:=1
 
 LUCI_TITLE:=LuCI app for ZJKJU Ruijie ePortal authentication
@@ -27,17 +27,16 @@ config zjkju-auth 'main'
 EOF
 
 # 强制权限为 600，保护密码安全
-# libuci 写盘时会先 chmod 成原文件权限再 rename，所以这个 600 会一直保持
 chmod 600 /etc/config/zjkju-auth
 
-# 清理 1.0.2 遗留在旧路径的文件（新版目录保留，避免丢掉日志）
+# 清理历史遗留在旧路径的文件
 rm -f /var/log/zjkju-auth.log
 rm -f /tmp/zjkju-auth-status
 rm -f /tmp/zjkju-auth-last-url
 rm -f /tmp/zjkju-auth-online-printed
 mkdir -p /var/log/zjkju-auth
 
-# 补回 luci.mk 默认 postinst 的缓存清理逻辑（自定义 postinst 会顶掉默认实现）
+# 补回 luci.mk 默认 postinst 的缓存清理逻辑
 rm -f /tmp/luci-indexcache.*
 rm -rf /tmp/luci-modulecache/
 /etc/init.d/rpcd reload 2>/dev/null
