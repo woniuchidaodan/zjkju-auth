@@ -4,8 +4,13 @@ local STATE_DIR   = "/var/log/zjkju-auth"
 local LOG_FILE    = STATE_DIR .. "/auth.log"
 local STATUS_FILE = STATE_DIR .. "/status"
 
+-- 版本以 Makefile 为准；这里只是 opkg 读不到时的兜底
+local FALLBACK_VERSION = "1.0.4"
+
+-- GitHub 仓库（自动更新只允许从这个仓库取包）
+local REPO_API = "https://api.github.com/repos/woniuchidaodan/zjkju-auth/releases/latest"
+
 function index()
-	-- 不用全局 nixio：显式 require，避免依赖运行时加载顺序
 	local fs = require "nixio.fs"
 
 	if not fs.access("/etc/config/zjkju-auth") then
@@ -27,6 +32,12 @@ function index()
 
 	entry({"admin", "services", "zjkju-auth", "status"},
 		call("action_status")).leaf = true
+
+	entry({"admin", "services", "zjkju-auth", "check_update"},
+		call("action_check_update")).leaf = true
+
+	entry({"admin", "services", "zjkju-auth", "do_update"},
+		call("action_do_update")).leaf = true
 end
 
 function action_get_log()
@@ -46,14 +57,12 @@ function action_get_log()
 		return
 	end
 
-	-- 太大时只取最后 100KB，避免把路由器内存吃光
 	if #data > 100 * 1024 then
 		data = data:sub(-(100 * 1024))
 		local nl = data:find("\n")
 		if nl then data = data:sub(nl + 1) end
 	end
 
-	-- 取最后 100 行
 	local lines = {}
 	for line in (data .. "\n"):gmatch("(.-)\n") do
 		if line ~= "" then lines[#lines + 1] = line end
@@ -85,7 +94,6 @@ function action_clear_log()
 	http.write('{"ok":true}')
 end
 
--- 不 fork curl，直接读 wrapper 写的状态文件 + UCI enabled
 function action_status()
 	local http = require "luci.http"
 	local sys = require "luci.sys"
@@ -116,4 +124,170 @@ function action_status()
 		status = status,
 		ts = os.time()
 	})
+end
+
+-- 从 opkg 读已安装版本，读不到则回落
+local function get_installed_version()
+	local sys = require "luci.sys"
+	local v = sys.exec("opkg list-installed luci-app-zjkju-auth 2>/dev/null | awk '{print $3}'")
+	v = (v or ""):match("[0-9][0-9%.]*") or ""
+	return (v ~= "" and v) or FALLBACK_VERSION
+end
+
+local function compare_version(v1, v2)
+	v1 = (v1 or ""):match("[0-9][0-9%.]*") or ""
+	v2 = (v2 or ""):match("[0-9][0-9%.]*") or ""
+	local t1, t2 = {}, {}
+	for n in string.gmatch(v1, "%d+") do t1[#t1 + 1] = tonumber(n) end
+	for n in string.gmatch(v2, "%d+") do t2[#t2 + 1] = tonumber(n) end
+	local mx = math.max(#t1, #t2)
+	for i = 1, mx do
+		local a, b = t1[i] or 0, t2[i] or 0
+		if a > b then return 1 end
+		if a < b then return -1 end
+	end
+	return 0
+end
+
+-- 拉取最新 release（只允许 HTTPS 的 GitHub API）
+local function fetch_latest_release()
+	local sys = require "luci.sys"
+	local jsonc = require "luci.jsonc"
+
+	local res = sys.exec("curl -sS --fail --max-time 10 -H 'User-Agent: OpenWrt' '" .. REPO_API .. "'")
+	if not res or res == "" then
+		return nil
+	end
+
+	local ok, parsed = pcall(jsonc.parse, res)
+	if ok and type(parsed) == "table" and parsed.tag_name then
+		return parsed
+	end
+	return nil
+end
+
+-- 按扩展名选 asset
+local function pick_asset(rel, ext)
+	if type(rel.assets) ~= "table" then
+		return nil
+	end
+	for _, a in ipairs(rel.assets) do
+		if type(a) == "table" and a.name and a.browser_download_url
+		   and a.name:match("%." .. ext .. "$") then
+			return a
+		end
+	end
+	return nil
+end
+
+function action_check_update()
+	local http = require "luci.http"
+
+	local current = get_installed_version()
+	local result = { current_version = current, has_update = false }
+
+	local rel = fetch_latest_release()
+	if not rel then
+		result.error = "请求超时或无法连接 GitHub，请检查路由器网络"
+	else
+		local latest = tostring(rel.tag_name):gsub("^v", "")
+		result.latest_version = latest
+		result.body = rel.body or ""
+		result.download_url = rel.html_url or ""
+		if compare_version(latest, current) > 0 then
+			result.has_update = true
+		end
+	end
+
+	http.prepare_content("application/json; charset=utf-8")
+	http.write_json(result)
+end
+
+-- 自动更新：服务端自己从 GitHub 取包，绝不信任客户端传来的 URL。
+-- 客户端只发一个确认（含 CSRF token），下载地址在服务端推导。
+function action_do_update()
+	local http = require "luci.http"
+	local sys = require "luci.sys"
+	local fs = require "nixio.fs"
+	local util = require "luci.util"
+
+	http.prepare_content("application/json; charset=utf-8")
+
+	-- 1) 只接受 POST + 校验 CSRF token（安装 = 改状态，必须防 CSRF）
+	if (http.getenv("REQUEST_METHOD") or ""):upper() ~= "POST" then
+		http.status(405, "Method Not Allowed")
+		http.write_json({ success = false, error = "仅支持 POST" })
+		return
+	end
+
+	local dispatcher = require "luci.dispatcher"
+	if (http.formvalue("token") or "") ~= (dispatcher.context.authtoken or "") then
+		http.status(403, "Forbidden")
+		http.write_json({ success = false, error = "令牌校验失败" })
+		return
+	end
+
+	-- 2) 探明包管理器与格式
+	local has_opkg = (sys.call("command -v opkg >/dev/null 2>&1") == 0)
+	local has_apk  = (sys.call("command -v apk >/dev/null 2>&1") == 0)
+	if not has_opkg and not has_apk then
+		http.write_json({ success = false, error = "未找到 opkg 或 apk" })
+		return
+	end
+	local ext = has_opkg and "ipk" or "apk"
+
+	-- 3) 服务端重新拉 release，选对应格式的包
+	local rel = fetch_latest_release()
+	if not rel then
+		http.write_json({ success = false, error = "无法获取最新版本信息" })
+		return
+	end
+	local asset = pick_asset(rel, ext)
+	if not asset then
+		http.write_json({ success = false, error = "Release 里没有 " .. ext .. " 安装包" })
+		return
+	end
+	local url = asset.browser_download_url
+
+	-- 4) 只允许 HTTPS 且必须是 GitHub 域名，防被篡改的 release 数据引导到别处
+	if not url:match("^https://[^/]*github%.com/") and
+	   not url:match("^https://[^/]*githubusercontent%.com/") then
+		http.write_json({ success = false, error = "安装包地址不合法" })
+		return
+	end
+
+	-- 5) 下载
+	local target = "/tmp/zjkju-auth-update." .. ext
+	local dl_cmd = string.format("curl -sS --fail -L --max-time 90 -o %s %s",
+		util.shellquote(target), util.shellquote(url))
+	if sys.call(dl_cmd) ~= 0 then
+		fs.remove(target)
+		http.write_json({ success = false, error = "下载安装包失败" })
+		return
+	end
+
+	-- 6) 尺寸校验（包至少几 KB，避免下到 HTML 错误页）
+	local st = fs.stat(target)
+	if not st or (st.size or 0) < 2048 then
+		fs.remove(target)
+		http.write_json({ success = false, error = "下载内容异常" })
+		return
+	end
+
+	-- 7) 安装
+	local install_cmd
+	if has_opkg then
+		install_cmd = "opkg install " .. util.shellquote(target) .. " >/dev/null 2>&1"
+	else
+		install_cmd = "apk add --allow-untrusted " .. util.shellquote(target) .. " >/dev/null 2>&1"
+	end
+	-- 单独取安装命令的退出码（不能拼 rm，否则拿到的是 rm 的 0）
+	local irc = sys.call(install_cmd)
+	fs.remove(target)
+
+	if irc == 0 then
+		http.write_json({ success = true })
+	else
+		http.write_json({ success = false, error = "安装失败，请检查日志或手动安装" })
+	end
 end
