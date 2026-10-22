@@ -126,10 +126,13 @@ function action_status()
 	})
 end
 
--- 从 opkg 读已安装版本，读不到则回落
+-- 从 opkg 读已安装版本，精准切掉后缀
 local function get_installed_version()
 	local sys = require "luci.sys"
-	local v = sys.exec("opkg list-installed luci-app-zjkju-auth 2>/dev/null | awk '{print $3}'")
+	local v = sys.exec("opkg status luci-app-zjkju-auth 2>/dev/null | grep '^Version:' | awk '{print $2}' | cut -d'-' -f1")
+	if not v or v == "" then
+		v = sys.exec("apk info -v luci-app-zjkju-auth 2>/dev/null | head -n1 | cut -d'-' -f2")
+	end
 	v = (v or ""):match("[0-9][0-9%.]*") or ""
 	return (v ~= "" and v) or FALLBACK_VERSION
 end
@@ -149,7 +152,7 @@ local function compare_version(v1, v2)
 	return 0
 end
 
--- 拉取最新 release（只允许 HTTPS 的 GitHub API）
+-- 拉取最新 release
 local function fetch_latest_release()
 	local sys = require "luci.sys"
 	local jsonc = require "luci.jsonc"
@@ -203,8 +206,7 @@ function action_check_update()
 	http.write_json(result)
 end
 
--- 自动更新：服务端自己从 GitHub 取包，绝不信任客户端传来的 URL。
--- 客户端只发一个确认（含 CSRF token），下载地址在服务端推导。
+-- 自动更新：服务端推导 URL
 function action_do_update()
 	local http = require "luci.http"
 	local sys = require "luci.sys"
@@ -213,7 +215,6 @@ function action_do_update()
 
 	http.prepare_content("application/json; charset=utf-8")
 
-	-- 1) 只接受 POST + 校验 CSRF token（安装 = 改状态，必须防 CSRF）
 	if (http.getenv("REQUEST_METHOD") or ""):upper() ~= "POST" then
 		http.status(405, "Method Not Allowed")
 		http.write_json({ success = false, error = "仅支持 POST" })
@@ -227,7 +228,6 @@ function action_do_update()
 		return
 	end
 
-	-- 2) 探明包管理器与格式
 	local has_opkg = (sys.call("command -v opkg >/dev/null 2>&1") == 0)
 	local has_apk  = (sys.call("command -v apk >/dev/null 2>&1") == 0)
 	if not has_opkg and not has_apk then
@@ -236,7 +236,6 @@ function action_do_update()
 	end
 	local ext = has_opkg and "ipk" or "apk"
 
-	-- 3) 服务端重新拉 release，选对应格式的包
 	local rel = fetch_latest_release()
 	if not rel then
 		http.write_json({ success = false, error = "无法获取最新版本信息" })
@@ -249,14 +248,12 @@ function action_do_update()
 	end
 	local url = asset.browser_download_url
 
-	-- 4) 只允许 HTTPS 且必须是 GitHub 域名，防被篡改的 release 数据引导到别处
 	if not url:match("^https://[^/]*github%.com/") and
 	   not url:match("^https://[^/]*githubusercontent%.com/") then
 		http.write_json({ success = false, error = "安装包地址不合法" })
 		return
 	end
 
-	-- 5) 下载
 	local target = "/tmp/zjkju-auth-update." .. ext
 	local dl_cmd = string.format("curl -sS --fail -L --max-time 90 -o %s %s",
 		util.shellquote(target), util.shellquote(url))
@@ -266,7 +263,6 @@ function action_do_update()
 		return
 	end
 
-	-- 6) 尺寸校验（包至少几 KB，避免下到 HTML 错误页）
 	local st = fs.stat(target)
 	if not st or (st.size or 0) < 2048 then
 		fs.remove(target)
@@ -274,14 +270,12 @@ function action_do_update()
 		return
 	end
 
-	-- 7) 安装
 	local install_cmd
 	if has_opkg then
 		install_cmd = "opkg install " .. util.shellquote(target) .. " >/dev/null 2>&1"
 	else
 		install_cmd = "apk add --allow-untrusted " .. util.shellquote(target) .. " >/dev/null 2>&1"
 	end
-	-- 单独取安装命令的退出码（不能拼 rm，否则拿到的是 rm 的 0）
 	local irc = sys.call(install_cmd)
 	fs.remove(target)
 
