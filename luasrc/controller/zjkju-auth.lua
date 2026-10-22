@@ -7,8 +7,8 @@ local STATUS_FILE = STATE_DIR .. "/status"
 -- 版本以 Makefile 为准；这里只是 opkg 读不到时的兜底
 local FALLBACK_VERSION = "1.0.4"
 
--- GitHub 仓库（自动更新只允许从这个仓库取包）
-local REPO_API = "https://api.github.com/repos/woniuchidaodan/zjkju-auth/releases/latest"
+-- GitHub 仓库（加入了加速代理，解决校园网直连超时问题）
+local REPO_API = "https://ghproxy.com/https://api.github.com/repos/woniuchidaodan/zjkju-auth/releases/latest"
 
 function index()
 	local fs = require "nixio.fs"
@@ -152,12 +152,12 @@ local function compare_version(v1, v2)
 	return 0
 end
 
--- 拉取最新 release
+-- 拉取最新 release（使用了代理的 API 地址）
 local function fetch_latest_release()
 	local sys = require "luci.sys"
 	local jsonc = require "luci.jsonc"
 
-	local res = sys.exec("curl -sS --fail --max-time 10 -H 'User-Agent: OpenWrt' '" .. REPO_API .. "'")
+	local res = sys.exec("curl -sS --fail --max-time 15 -H 'User-Agent: OpenWrt' '" .. REPO_API .. "'")
 	if not res or res == "" then
 		return nil
 	end
@@ -191,7 +191,7 @@ function action_check_update()
 
 	local rel = fetch_latest_release()
 	if not rel then
-		result.error = "请求超时或无法连接 GitHub，请检查路由器网络"
+		result.error = "请求超时或无法连接 GitHub（代理失效），请检查路由器网络"
 	else
 		local latest = tostring(rel.tag_name):gsub("^v", "")
 		result.latest_version = latest
@@ -206,7 +206,7 @@ function action_check_update()
 	http.write_json(result)
 end
 
--- 自动更新：服务端推导 URL
+-- 自动更新：服务端推导 URL，并加入加速代理下载
 function action_do_update()
 	local http = require "luci.http"
 	local sys = require "luci.sys"
@@ -248,18 +248,26 @@ function action_do_update()
 	end
 	local url = asset.browser_download_url
 
+	-- 校验原始地址合法性（保障安全）
 	if not url:match("^https://[^/]*github%.com/") and
 	   not url:match("^https://[^/]*githubusercontent%.com/") then
-		http.write_json({ success = false, error = "安装包地址不合法" })
+		http.write_json({ success = false, error = "安装包原始地址不合法" })
 		return
 	end
 
+	-- ==========================================
+	-- 核心修改：下载时加入 ghproxy 加速代理
+	-- ==========================================
+	local download_url = "https://ghproxy.com/" .. url
+
 	local target = "/tmp/zjkju-auth-update." .. ext
-	local dl_cmd = string.format("curl -sS --fail -L --max-time 90 -o %s %s",
-		util.shellquote(target), util.shellquote(url))
+	-- 超时设置为 120 秒，给下载留足时间
+	local dl_cmd = string.format("curl -sS --fail -L --max-time 120 -o %s %s",
+		util.shellquote(target), util.shellquote(download_url))
+		
 	if sys.call(dl_cmd) ~= 0 then
 		fs.remove(target)
-		http.write_json({ success = false, error = "下载安装包失败" })
+		http.write_json({ success = false, error = "下载失败，代理可能超时，请前往 Releases 手动下载" })
 		return
 	end
 
