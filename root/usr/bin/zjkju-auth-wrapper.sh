@@ -13,27 +13,31 @@ CACHE_EXPIRE_SEC=21600
 
 mkdir -p "$STATE_DIR"
 
-# 1. 业务失败（密码错误等）：固定冷却
 FAIL_COUNT=0
 MAX_FAIL=3
 FAIL_COOLDOWN_SEC=300
 
-# 2. 假成功（网关观察期）冷却：线性递增，带封顶
 PENDING_COUNT=0
 MAX_PENDING=3
 PENDING_COOLDOWN_INIT=300
 PENDING_COOLDOWN_CURRENT=300
 
-# 3. 认证超时/响应异常冷却：线性递增，带封顶
 TIMEOUT_COUNT=0
 MAX_TIMEOUT=3
 TIMEOUT_COOLDOWN_INIT=300
 TIMEOUT_COOLDOWN_CURRENT=300
-MAX_COOLDOWN=1800      # 封顶 30 分钟
+MAX_COOLDOWN=1800
 
 COOLDOWN_CHECK_INTERVAL=10
-
 NOCONFIG_LOGGED=0
+
+# 开机静默校准时间
+if [ "$(date +%Y)" -lt "2024" ]; then
+    for i in 1 2 3 4 5; do
+        sleep 1
+        if [ "$(date +%Y)" -ge "2024" ]; then break; fi
+    done
+fi
 
 . /lib/functions.sh
 
@@ -49,10 +53,6 @@ log_msg() {
     logger -t zjkju-auth "$1"
 }
 
-# ==========================================
-# 核心改进：捕获系统终止信号，实现瞬间退出
-# 这样重启服务或更新时，procd 不需要强行等待 sleep 结束
-# ==========================================
 trap 'log_msg "收到停止信号，服务退出"; exit 0' TERM INT
 
 set_status() { echo "$1" > "$STATUS_FILE"; }
@@ -60,9 +60,7 @@ log_msg "wrapper started"
 
 normalize_interval() {
     local v="$1"
-    case "$v" in
-        ''|*[!0-9]*) echo 10; return ;;
-    esac
+    case "$v" in ''|*[!0-9]*) echo 10; return ;; esac
     [ "$v" -lt 5 ] && { echo 10; return; }
     [ "$v" -gt 3600 ] && { echo 3600; return; }
     echo "$v"
@@ -70,9 +68,7 @@ normalize_interval() {
 
 is_online() {
     for PING_TARGET in 223.5.5.5 223.6.6.6; do
-        if ping -c 1 -W 2 "$PING_TARGET" >/dev/null 2>&1; then
-            return 0
-        fi
+        if ping -c 1 -W 2 "$PING_TARGET" >/dev/null 2>&1; then return 0; fi
     done
     BODY=$(curl -s --max-time 5 -A "$UA" "http://www.msftconnecttest.com/connecttest.txt" 2>/dev/null | tr -d '\r\n')
     [ "$BODY" = "Microsoft Connect Test" ]
@@ -129,11 +125,10 @@ do_auth() {
     fi
     QS_ENCODED=$(urlencode_query "$QUERY_STRING")
 
-    log_msg "正在尝试认证..."
+    log_msg "锐捷认证客户端启动"
     log_msg "用户名: $USERNAME"
     log_msg "认证地址: $AUTH_URL"
 
-    # 路径必须是 /eportal/（全小写）：写成 /ePortal/ 会 404
     RESPONSE=$(curl -s --max-time 10 -X POST "$AUTH_SERVER/eportal/InterFace.do?method=login" \
         -H "Content-Type: application/x-www-form-urlencoded; charset=UTF-8" \
         -H "User-Agent: $UA" -H "Referer: $AUTH_URL" -H "Origin: $AUTH_SERVER" \
@@ -165,33 +160,21 @@ cooldown_wait() {
 
     while :; do
         sleep "$COOLDOWN_CHECK_INTERVAL"
-
-        if is_online; then
-            log_msg "冷却期间检测到网络已恢复，提前结束冷却"
-            set_status "online"
-            return 0
-        fi
-
+        if is_online; then set_status "online"; return 0; fi
         config_load zjkju-auth
         local new_user new_pass
         config_get new_user main username
         config_get new_pass main password
         if [ "$new_user" != "$cur_user" ] || [ "$new_pass" != "$cur_pass" ]; then
-            log_msg "检测到账号/密码已修改，提前结束冷却"
-            set_status "offline"
-            return 0
+            set_status "offline"; return 0
         fi
-
         [ "$(date +%s)" -ge "$deadline" ] && break
     done
-
-    log_msg "冷却结束，恢复认证尝试"
     set_status "offline"
     return 0
 }
 
 STATE="init"
-EVER_ONLINE=0
 
 while true; do
     config_load zjkju-auth
@@ -228,48 +211,36 @@ while true; do
     if is_online; then
         set_status "online"
         if [ ! -f "$ONLINE_FLAG" ]; then
-            case "$STATE" in
-                init) log_msg "已联网，无需认证" ;;
-                offline) [ "$EVER_ONLINE" = "1" ] && log_msg "网络已恢复" ;;
-            esac
+            log_msg "已联网，无需认证"
             touch "$ONLINE_FLAG"
         fi
-        STATE="online"; EVER_ONLINE=1; FAIL_COUNT=0; PENDING_COUNT=0; TIMEOUT_COUNT=0
-
+        STATE="online"; FAIL_COUNT=0; PENDING_COUNT=0; TIMEOUT_COUNT=0
         TIMEOUT_COOLDOWN_CURRENT=$TIMEOUT_COOLDOWN_INIT
         PENDING_COOLDOWN_CURRENT=$PENDING_COOLDOWN_INIT
-
         sleep "$check_interval"; continue
     fi
 
     set_status "offline"
     rm -f "$ONLINE_FLAG"
 
-    # ============ 断网防抖确认机制 ============
     if [ "$STATE" = "online" ]; then
-        log_msg "检测到断网，等待 10 秒防抖确认..."
         sleep 10
-
         if is_online; then
-            log_msg "网络已闪断恢复，取消本次认证"
-            STATE="online"
-            touch "$ONLINE_FLAG"
             set_status "online"
-            sleep "$check_interval"
-            continue
+            log_msg "已联网，无需认证" 
+            touch "$ONLINE_FLAG"
+            STATE="online"
+            sleep "$check_interval"; continue
         fi
-        log_msg "确认网络已彻底断开，开始尝试重新认证"
+        log_msg "检测到掉线，开始认证"
     elif [ "$STATE" != "offline" ]; then
-        # 走到这里 STATE 只可能是 init（online 已被上面分支处理），EVER_ONLINE 必为 0
-        log_msg "网络未连接，开始认证"
+        log_msg "检测到掉线，开始认证"
     fi
     STATE="offline"
-    # =================================================
 
     AUTH_URL=$(fetch_auth_url)
     if [ -z "$AUTH_URL" ]; then
-        sleep 10
-        continue
+        sleep 10; continue
     fi
 
     [ -z "$service" ] && service="%E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91"
@@ -279,39 +250,28 @@ while true; do
     if [ "$RC" = "0" ]; then
         case "$AUTH_URL" in *wlanuserip=*) echo "$AUTH_URL" > "$CACHE_FILE" ;; esac
         FAIL_COUNT=0; TIMEOUT_COUNT=0
-
         PENDING_COUNT=$((PENDING_COUNT + 1))
-
         if [ "$PENDING_COUNT" -ge "$MAX_PENDING" ]; then
-            log_msg "连续 ${PENDING_COUNT} 次认证返回成功但仍离线，冷却 ${PENDING_COOLDOWN_CURRENT} 秒（可能是网关观察期）"
+            log_msg "连续 ${PENDING_COUNT} 次认证返回成功但仍离线，冷却 ${PENDING_COOLDOWN_CURRENT} 秒"
             cooldown_wait "$username" "$password" "$PENDING_COOLDOWN_CURRENT"
-
             PENDING_COOLDOWN_CURRENT=$((PENDING_COOLDOWN_CURRENT + 300))
             [ "$PENDING_COOLDOWN_CURRENT" -gt "$MAX_COOLDOWN" ] && PENDING_COOLDOWN_CURRENT=$MAX_COOLDOWN
-
             PENDING_COUNT=0; sleep "$check_interval"; continue
         fi
         RETRY_DELAY=$((15 * PENDING_COUNT)); [ "$RETRY_DELAY" -gt 120 ] && RETRY_DELAY=120
     else
         PENDING_COUNT=0
-
         if [ "$RC" = "2" ] && [ -f "$CACHE_FILE" ]; then
             CACHED_URL=$(cat "$CACHE_FILE" 2>/dev/null)
-            if [ "$CACHED_URL" = "$AUTH_URL" ]; then
-                log_msg "当前使用的缓存 URL 请求异常，自动清理缓存文件"
-                rm -f "$CACHE_FILE"
-            fi
+            if [ "$CACHED_URL" = "$AUTH_URL" ]; then rm -f "$CACHE_FILE"; fi
         fi
-
         if [ "$RC" = "2" ]; then
             TIMEOUT_COUNT=$((TIMEOUT_COUNT + 1))
             if [ "$TIMEOUT_COUNT" -ge "$MAX_TIMEOUT" ]; then
                 log_msg "连续 ${TIMEOUT_COUNT} 次认证请求超时，冷却 ${TIMEOUT_COOLDOWN_CURRENT} 秒"
                 cooldown_wait "$username" "$password" "$TIMEOUT_COOLDOWN_CURRENT"
-
                 TIMEOUT_COOLDOWN_CURRENT=$((TIMEOUT_COOLDOWN_CURRENT + 300))
                 [ "$TIMEOUT_COOLDOWN_CURRENT" -gt "$MAX_COOLDOWN" ] && TIMEOUT_COOLDOWN_CURRENT=$MAX_COOLDOWN
-
                 TIMEOUT_COUNT=0; sleep "$check_interval"; continue
             fi
         else
@@ -322,11 +282,9 @@ while true; do
                 FAIL_COUNT=0; sleep "$check_interval"; continue
             fi
         fi
-
         RETRY_DELAY=$((check_interval * (FAIL_COUNT + TIMEOUT_COUNT)))
         [ "$RETRY_DELAY" -lt 10 ] && RETRY_DELAY=10
         [ "$RETRY_DELAY" -gt 120 ] && RETRY_DELAY=120
     fi
-
     sleep "$RETRY_DELAY"
 done
