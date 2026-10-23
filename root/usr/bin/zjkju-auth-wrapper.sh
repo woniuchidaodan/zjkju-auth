@@ -4,14 +4,12 @@ AUTH_SERVER="http://10.80.80.249"
 UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 STATE_DIR="/var/log/zjkju-auth"
-LOG_FILE="$STATE_DIR/auth.log"
 CACHE_FILE="$STATE_DIR/last-url"
 ONLINE_FLAG="$STATE_DIR/online-printed"
 STATUS_FILE="$STATE_DIR/status"
-LOG_MAX_KB=256
-CACHE_EXPIRE_SEC=21600
 
 mkdir -p "$STATE_DIR"
+rm -f /tmp/zjkju-auth-cleared
 
 FAIL_COUNT=0
 MAX_FAIL=3
@@ -31,25 +29,10 @@ MAX_COOLDOWN=1800
 COOLDOWN_CHECK_INTERVAL=10
 NOCONFIG_LOGGED=0
 
-# 开机静默校准时间
-if [ "$(date +%Y)" -lt "2024" ]; then
-    for i in 1 2 3 4 5; do
-        sleep 1
-        if [ "$(date +%Y)" -ge "2024" ]; then break; fi
-    done
-fi
-
 . /lib/functions.sh
 
+# 【灵魂回归】：纯 logger，时间永远由 logd 校准，绝不穿越
 log_msg() {
-    if [ -f "$LOG_FILE" ]; then
-        SIZE_KB=$(du -k "$LOG_FILE" 2>/dev/null | awk '{print $1}')
-        if [ -n "$SIZE_KB" ] && [ "$SIZE_KB" -gt "$LOG_MAX_KB" ] 2>/dev/null; then
-            tail -n 2000 "$LOG_FILE" > "${LOG_FILE}.tmp" 2>/dev/null
-            mv "${LOG_FILE}.tmp" "$LOG_FILE" 2>/dev/null
-        fi
-    fi
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOG_FILE"
     logger -t zjkju-auth "$1"
 }
 
@@ -175,6 +158,7 @@ cooldown_wait() {
 }
 
 STATE="init"
+EVER_ONLINE=0
 
 while true; do
     config_load zjkju-auth
@@ -197,50 +181,56 @@ while true; do
     fi
     NOCONFIG_LOGGED=0
 
+    # 清理 6 小时以上未更新的缓存
     if [ -f "$CACHE_FILE" ]; then
         NOW=$(date +%s); FILE_TIME=$(date -r "$CACHE_FILE" +%s 2>/dev/null)
         if [ -n "$FILE_TIME" ] && [ "$FILE_TIME" -gt 0 ] 2>/dev/null; then
             AGE=$((NOW - FILE_TIME))
-            if [ "$AGE" -gt "$CACHE_EXPIRE_SEC" ]; then
-                log_msg "缓存 URL 存活超过 ${CACHE_EXPIRE_SEC} 秒，自动清理"
+            if [ "$AGE" -gt 21600 ]; then
                 rm -f "$CACHE_FILE"
             fi
         fi
     fi
 
+    # ============ 在线 ============
     if is_online; then
         set_status "online"
         if [ ! -f "$ONLINE_FLAG" ]; then
-            log_msg "已联网，无需认证"
+            case "$STATE" in
+                init) log_msg "已联网，无需认证" ;;
+                offline) [ "$EVER_ONLINE" = "1" ] && log_msg "网络已恢复" ;;
+            esac
             touch "$ONLINE_FLAG"
         fi
-        STATE="online"; FAIL_COUNT=0; PENDING_COUNT=0; TIMEOUT_COUNT=0
+        STATE="online"; EVER_ONLINE=1; FAIL_COUNT=0; PENDING_COUNT=0; TIMEOUT_COUNT=0
         TIMEOUT_COOLDOWN_CURRENT=$TIMEOUT_COOLDOWN_INIT
         PENDING_COOLDOWN_CURRENT=$PENDING_COOLDOWN_INIT
         sleep "$check_interval"; continue
     fi
 
+    # ============ 离线 ============
     set_status "offline"
     rm -f "$ONLINE_FLAG"
 
+    # 10秒防抖确认机制（静默）
     if [ "$STATE" = "online" ]; then
         sleep 10
         if is_online; then
             set_status "online"
-            log_msg "已联网，无需认证" 
             touch "$ONLINE_FLAG"
             STATE="online"
             sleep "$check_interval"; continue
         fi
-        log_msg "检测到掉线，开始认证"
-    elif [ "$STATE" != "offline" ]; then
-        log_msg "检测到掉线，开始认证"
     fi
-    STATE="offline"
 
     AUTH_URL=$(fetch_auth_url)
     if [ -z "$AUTH_URL" ]; then
         sleep 10; continue
+    fi
+
+    if [ "$STATE" != "offline" ]; then
+        log_msg "检测到掉线，开始认证"
+        STATE="offline"
     fi
 
     [ -z "$service" ] && service="%E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91"
@@ -252,7 +242,6 @@ while true; do
         FAIL_COUNT=0; TIMEOUT_COUNT=0
         PENDING_COUNT=$((PENDING_COUNT + 1))
         if [ "$PENDING_COUNT" -ge "$MAX_PENDING" ]; then
-            log_msg "连续 ${PENDING_COUNT} 次认证返回成功但仍离线，冷却 ${PENDING_COOLDOWN_CURRENT} 秒"
             cooldown_wait "$username" "$password" "$PENDING_COOLDOWN_CURRENT"
             PENDING_COOLDOWN_CURRENT=$((PENDING_COOLDOWN_CURRENT + 300))
             [ "$PENDING_COOLDOWN_CURRENT" -gt "$MAX_COOLDOWN" ] && PENDING_COOLDOWN_CURRENT=$MAX_COOLDOWN
@@ -268,7 +257,6 @@ while true; do
         if [ "$RC" = "2" ]; then
             TIMEOUT_COUNT=$((TIMEOUT_COUNT + 1))
             if [ "$TIMEOUT_COUNT" -ge "$MAX_TIMEOUT" ]; then
-                log_msg "连续 ${TIMEOUT_COUNT} 次认证请求超时，冷却 ${TIMEOUT_COOLDOWN_CURRENT} 秒"
                 cooldown_wait "$username" "$password" "$TIMEOUT_COOLDOWN_CURRENT"
                 TIMEOUT_COOLDOWN_CURRENT=$((TIMEOUT_COOLDOWN_CURRENT + 300))
                 [ "$TIMEOUT_COOLDOWN_CURRENT" -gt "$MAX_COOLDOWN" ] && TIMEOUT_COOLDOWN_CURRENT=$MAX_COOLDOWN
