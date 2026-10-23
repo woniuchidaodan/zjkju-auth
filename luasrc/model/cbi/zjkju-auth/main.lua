@@ -4,24 +4,21 @@ local sys       = require "luci.sys"
 local disp      = require "luci.dispatcher"
 
 local m, s, o
-
--- 版本以 Makefile 为准：精准切掉后缀，防错位
-local PKG_VERSION = "1.0.4"
+local PKG_VERSION = "1.0.4-r2"
 do
-	local v = sys.exec("opkg status luci-app-zjkju-auth 2>/dev/null | grep '^Version:' | awk '{print $2}' | cut -d'-' -f1")
+	local v = sys.exec("opkg status luci-app-zjkju-auth 2>/dev/null | grep '^Version:' | awk '{print $2}'")
 	if not v or v == "" then
-		v = sys.exec("apk info -v luci-app-zjkju-auth 2>/dev/null | head -n1 | cut -d'-' -f2")
+		v = sys.exec("apk info -v luci-app-zjkju-auth 2>/dev/null | head -n1 | cut -d'-' -f2-")
 	end
-	v = (v or ""):match("[0-9][0-9%.]*") or ""
-	if v ~= "" then PKG_VERSION = v end
+	v = (v or ""):gsub("%s+", "")
+	local clean_v = v:match("([0-9%.]+%-r[0-9]+)") or v:match("([0-9%.]+)") or ""
+	if clean_v ~= "" then PKG_VERSION = clean_v end
 end
 
--- 将版本号拼接到大标题后面
 m = Map("zjkju-auth", 
 	translate("ZJKJU 校园网认证") .. " <span style='font-size:12px; color:#888; font-weight:normal; margin-left:8px;'>Version: " .. PKG_VERSION .. "</span>",
 	translate("在路由器上自动完成校园网 ePortal 认证。填写学号和密码后，勾选“启用”并保存。"))
 
--- 一个 NamedSection，两个 tab（双页）
 s = m:section(NamedSection, "main", "zjkju-auth", translate("认证设置"))
 s.anonymous = true
 s.addremove = false
@@ -29,7 +26,6 @@ s.addremove = false
 s:tab("basic", translate("认证设置"))
 s:tab("other", translate("其他设置"))
 
--- ============ Tab 1：认证设置 ============
 o = s:taboption("basic", Flag, "enabled", translate("启用"),
 	translate("勾选并保存后，服务会立即启动；取消勾选保存会停止服务"))
 o.default = 0
@@ -62,7 +58,6 @@ o = s:taboption("basic", Value, "manual_url", translate("手动认证地址"),
 o.datatype = "string"
 o.rmempty = true
 
--- ============ Tab 2：其他设置 ============
 o = s:taboption("other", DummyValue, "_log_location", translate("日志文件"))
 o.rawhtml = true
 o.default = "<code>/var/log/zjkju-auth/auth.log</code>"
@@ -79,7 +74,6 @@ o.default = [=[
 	<div style="margin-bottom:6px;">当前版本：<code>]=] .. PKG_VERSION .. [=[</code></div>
 	<button type="button" class="cbi-button cbi-button-action" style="position: relative; outline: none;" onclick="zjkjuCheckUpdate()">
 		检查更新
-		<!-- 红点提示 -->
 		<span id="zjkju-red-dot" style="display: none; position: absolute; top: -4px; right: -4px; width: 10px; height: 10px; background-color: #e74c3c; border-radius: 50%; box-shadow: 0 0 0 2px #fff;"></span>
 	</button>
 	<span id="zjkju-update-msg" style="margin-left:10px;"></span>
@@ -111,72 +105,43 @@ var zjkjuCheckUrl = ']=] .. checkUrl .. [=[';
 var zjkjuDoUrl = ']=] .. doUpdateUrl .. [=['; 
 var zjkjuToken = ']=] .. csrfToken .. [=['; 
 
-// 核心方法：执行检查和更新
 function doZjkjuCheck(isSilent) {
 	var msg = document.getElementById('zjkju-update-msg');
 	var dot = document.getElementById('zjkju-red-dot');
-	
-	if (!isSilent && msg) {
-		msg.style.color = '#888';
-		msg.textContent = '正在检查更新...';
-	}
-	
+	if (!isSilent && msg) { msg.style.color = '#888'; msg.textContent = '正在检查更新...'; }
 	XHR.get(zjkjuCheckUrl, null, function(x) {
 		if (!x || x.status !== 200) {
 			if (!isSilent && msg) { msg.style.color = '#e74c3c'; msg.textContent = '检查失败，请检查网络'; }
 			return;
 		}
 		var data;
-		try { data = JSON.parse(x.responseText); }
-		catch (e) { 
+		try { data = JSON.parse(x.responseText); } catch (e) { 
 			if (!isSilent && msg) { msg.style.color = '#e74c3c'; msg.textContent = '返回数据异常'; }
 			return; 
 		}
-		
 		if (data.error) {
 			if (!isSilent && msg) { msg.style.color = '#e74c3c'; msg.textContent = data.error; }
 		} else if (data.has_update) {
-			// 发现新版本：亮红点
 			if (dot) dot.style.display = 'inline-block';
-			
 			zjkjuUpdateData = data;
 			document.getElementById('zjkju-new-ver').textContent = 'v' + data.latest_version;
 			document.getElementById('zjkju-update-body').textContent = data.body || '';
-			
-			// 如果是手动点击的，直接弹窗；如果是后台静默检查，只亮红点不弹窗
 			if (!isSilent) {
 				document.getElementById('zjkju-update-modal').style.display = 'block';
 				if (msg) msg.textContent = '';
 			}
 		} else {
-			// 没有新版本：灭掉红点
 			if (dot) dot.style.display = 'none';
-			if (!isSilent && msg) {
-				msg.style.color = '#2980b9';
-				msg.textContent = '当前已是最新版本';
-			}
+			if (!isSilent && msg) { msg.style.color = '#2980b9'; msg.textContent = '当前已是最新版本'; }
 		}
 	});
 }
+window.zjkjuCheckUpdate = function() { doZjkjuCheck(false); };
+setTimeout(function() { doZjkjuCheck(true); }, 1000);
 
-// 暴露给按钮点击调用
-window.zjkjuCheckUpdate = function() {
-	doZjkjuCheck(false);
-};
-
-// 页面加载后，延迟 1 秒在后台静默检查一次（不打扰用户）
-setTimeout(function() {
-	doZjkjuCheck(true);
-}, 1000);
-
-window.zjkjuCloseUpdateModal = function() {
-	document.getElementById('zjkju-update-modal').style.display = 'none';
-};
-
+window.zjkjuCloseUpdateModal = function() { document.getElementById('zjkju-update-modal').style.display = 'none'; };
 window.zjkjuGoDownload = function() {
-	if (zjkjuUpdateData && zjkjuUpdateData.download_url) {
-		window.open(zjkjuUpdateData.download_url, '_blank');
-	}
+	if (zjkjuUpdateData && zjkjuUpdateData.download_url) { window.open(zjkjuUpdateData.download_url, '_blank'); }
 	zjkjuCloseUpdateModal();
 };
 
@@ -184,37 +149,38 @@ window.zjkjuInstallUpdate = function() {
 	var btn = document.getElementById('zjkju-btn-do-update');
 	if (!btn) return;
 	btn.disabled = true;
-	btn.textContent = '正在下载安装...';
+	var count = 15; 
+	btn.textContent = '后台下载安装中 (' + count + 's)...';
 	XHR.post(zjkjuDoUrl, { token: zjkjuToken }, function(x) {
-		var res = null;
 		if (x && x.status === 200) {
-			try { res = JSON.parse(x.responseText); } catch (e) {}
-		}
-		if (res && res.success) {
-			btn.textContent = '安装成功，正在刷新...';
-			setTimeout(function() { window.location.reload(); }, 2500);
+			var timer = setInterval(function() {
+				count--;
+				if (count <= 0) {
+					clearInterval(timer);
+					btn.textContent = '安装完成，正在刷新...';
+					window.location.reload(); 
+				} else {
+					btn.textContent = '后台下载安装中 (' + count + 's)...';
+				}
+			}, 1000);
 		} else {
-			alert('安装失败: ' + (res && res.error ? res.error : '网络错误'));
+			alert('请求失败，请重试');
 			btn.disabled = false;
-			btn.textContent = '重试';
+			btn.textContent = '立即更新';
 		}
 	});
 };
 </script>
 ]=]
 
--- 页面底部日志区（全局显示）
 local sec = m:section(SimpleSection)
 sec.template = "zjkju-auth/log"
 
 function m.on_after_commit(self)
 	local uci2 = require("luci.model.uci").cursor()
 	local enabled = uci2:get("zjkju-auth", "main", "enabled")
-
-	if enabled == "1" or enabled == "on" or enabled == "true"
-	   or enabled == "yes" or enabled == "enabled" then
+	if enabled == "1" or enabled == "on" or enabled == "true" or enabled == "yes" or enabled == "enabled" then
 		luci.sys.call("/etc/init.d/zjkju-auth enable >/dev/null 2>&1")
-		-- 核心修复：先停，再后台延迟 1 秒启动，彻底避开 procd 的清理死区
 		luci.sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
 		luci.sys.call("(sleep 1; /etc/init.d/zjkju-auth start) >/dev/null 2>&1 &")
 	else
