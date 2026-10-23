@@ -4,7 +4,7 @@ local sys       = require "luci.sys"
 local disp      = require "luci.dispatcher"
 
 local m, s, o
-local PKG_VERSION = "1.0.4-r2"
+local PKG_VERSION = "1.0.4-r3"
 do
 	local v = sys.exec("opkg status luci-app-zjkju-auth 2>/dev/null | grep '^Version:' | awk '{print $2}'")
 	if not v or v == "" then
