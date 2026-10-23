@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-zjkju-auth
 PKG_VERSION:=1.0.4
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 
 LUCI_TITLE:=LuCI app for ZJKJU Ruijie ePortal authentication
 LUCI_DESCRIPTION:=A LuCI application that keeps ZJKJU campus network logged in via Ruijie ePortal web authentication.
@@ -33,6 +33,10 @@ rm -f /var/log/zjkju-auth.log
 rm -f /tmp/zjkju-auth-status
 rm -f /tmp/zjkju-auth-last-url
 rm -f /tmp/zjkju-auth-online-printed
+rm -f /tmp/zjkju-auth-cleared
+# 【新增】清理可能残存的更新脚本和未下载完的安装包
+rm -f /tmp/zjkju_do_update.sh
+rm -f /tmp/zjkju_auth_update.*
 mkdir -p /var/log/zjkju-auth
 
 # 3. 刷新 LuCI 缓存
