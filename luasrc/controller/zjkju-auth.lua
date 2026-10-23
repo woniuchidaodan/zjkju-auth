@@ -4,7 +4,7 @@ local STATE_DIR   = "/var/log/zjkju-auth"
 local LOG_FILE    = STATE_DIR .. "/auth.log"
 local STATUS_FILE = STATE_DIR .. "/status"
 
-local FALLBACK_VERSION = "1.0.4-r3"
+local FALLBACK_VERSION = "1.0.4-r4"
 
 local GITHUB_PROXIES = {
 	"https://gh-proxy.com/",
@@ -28,7 +28,7 @@ function index()
 	entry({"admin", "services", "zjkju-auth", "do_update"}, call("action_do_update")).leaf = true
 end
 
--- 完美接管日志：读取系统日志落盘，时间绝对正确！
+-- 完美接管日志：读取系统日志，清洗前缀，落盘并展示
 function action_get_log()
 	local http = require "luci.http"
 	local sys = require "luci.sys"
@@ -41,22 +41,53 @@ function action_get_log()
 		return
 	end
 
+	-- 从系统日志抓取（这是唯一能保证时间被 logd 自动修正的源头）
 	local logs = sys.exec("logread -e zjkju-auth 2>/dev/null")
 	if not logs or logs == "" then
 		http.write("（暂无日志，服务可能还未启动过）")
 		return
 	end
 
-	fs.writefile(LOG_FILE, logs)
+	local clean_lines = {}
+	-- 英文月份映射表
+	local months = {
+		Jan="01",Feb="02",Mar="03",Apr="04",May="05",Jun="06",
+		Jul="07",Aug="08",Sep="09",Oct="10",Nov="11",Dec="12"
+	}
 
-	local lines = {}
 	for line in (logs .. "\n"):gmatch("(.-)\n") do
-		if line ~= "" then lines[#lines + 1] = line end
+		if line ~= "" then
+			-- 1. 无论如何，先把核心内容（冒号后面的文字）提取出来
+			local msg = line:match("zjkju%-auth:%s*(.*)") or line
+			
+			-- 2. 尝试从行首提取时间戳：匹配 "Fri Oct 23 18:32:30 2026" 这种结构
+			local m_str, d_str, t_str, y_str = line:match("(%a+)%s+(%d+)%s+([%d:]+)%s+(%d+)")
+			local clean_line = msg -- 默认兜底：只保留内容
+
+			if m_str and months[m_str] and y_str then
+				-- 完美替换为 2026-10-23 18:32:30 格式
+				local mm = months[m_str]
+				local dd = string.format("%02d", tonumber(d_str))
+				clean_line = y_str .. "-" .. mm .. "-" .. dd .. " " .. t_str .. " " .. msg
+			else
+				-- 如果固件的 logread 格式奇葩（没拿到年份），强行补当前时间
+				local now = os.date("%Y-%m-%d %H:%M:%S")
+				clean_line = now .. " " .. msg
+			end
+
+			table.insert(clean_lines, clean_line)
+		end
 	end
 
-	local start = math.max(1, #lines - 100 + 1)
+	local clean_logs_str = table.concat(clean_lines, "\n")
+	
+	-- 顺手把洗得干干净净的日志写入独立文件
+	fs.writefile(LOG_FILE, clean_logs_str)
+
+	-- 截取最后 100 行展示
+	local start = math.max(1, #clean_lines - 100 + 1)
 	local buf = {}
-	for i = start, #lines do buf[#buf + 1] = lines[i] end
+	for i = start, #clean_lines do buf[#buf + 1] = clean_lines[i] end
 
 	http.write(table.concat(buf, "\n"))
 end
@@ -258,12 +289,11 @@ for P in $PROXIES; do
             apk add --allow-untrusted "$TARGET" >/dev/null 2>&1
         fi
         rm -f "$TARGET"
-        rm -f "$0" # 安装成功，删除自身脚本
+        rm -f "$0"
         /etc/init.d/zjkju-auth restart >/dev/null 2>&1
         exit 0
     fi
 done
-# 走到这里说明所有代理全部失败，强制清理残缺文件和自身
 rm -f "$TARGET"
 rm -f "$0"
 exit 1
