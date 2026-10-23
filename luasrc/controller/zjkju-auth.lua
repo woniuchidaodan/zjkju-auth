@@ -4,7 +4,7 @@ local STATE_DIR   = "/var/log/zjkju-auth"
 local LOG_FILE    = STATE_DIR .. "/auth.log"
 local STATUS_FILE = STATE_DIR .. "/status"
 
-local FALLBACK_VERSION = "1.0.4-r2"
+local FALLBACK_VERSION = "1.0.4-r3"
 
 local GITHUB_PROXIES = {
 	"https://gh-proxy.com/",
@@ -28,26 +28,46 @@ function index()
 	entry({"admin", "services", "zjkju-auth", "do_update"}, call("action_do_update")).leaf = true
 end
 
+-- 完美接管日志：读取系统日志落盘，时间绝对正确！
 function action_get_log()
 	local http = require "luci.http"
+	local sys = require "luci.sys"
 	local fs = require "nixio.fs"
+
 	http.prepare_content("text/plain; charset=utf-8")
-	if not fs.access(LOG_FILE) then http.write("（暂无日志，服务可能还未启动过）") return end
-	local data = fs.readfile(LOG_FILE) or ""
-	if data == "" then http.write("（日志文件为空）") return end
-	if #data > 100 * 1024 then
-		data = data:sub(-(100 * 1024))
-		local nl = data:find("\n")
-		if nl then data = data:sub(nl + 1) end
+
+	if fs.access("/tmp/zjkju-auth-cleared") then
+		http.write("（日志已清空，等待新日志产生...）")
+		return
 	end
+
+	local logs = sys.exec("logread -e zjkju-auth 2>/dev/null")
+	if not logs or logs == "" then
+		http.write("（暂无日志，服务可能还未启动过）")
+		return
+	end
+
+	fs.writefile(LOG_FILE, logs)
+
 	local lines = {}
-	for line in (data .. "\n"):gmatch("(.-)\n") do
+	for line in (logs .. "\n"):gmatch("(.-)\n") do
 		if line ~= "" then lines[#lines + 1] = line end
 	end
+
 	local start = math.max(1, #lines - 100 + 1)
 	local buf = {}
 	for i = start, #lines do buf[#buf + 1] = lines[i] end
+
 	http.write(table.concat(buf, "\n"))
+end
+
+function action_clear_log()
+	local http = require "luci.http"
+	local fs = require "nixio.fs"
+	fs.writefile(LOG_FILE, "")
+	fs.writefile("/tmp/zjkju-auth-cleared", "1")
+	http.prepare_content("application/json")
+	http.write('{"ok":true}')
 end
 
 function action_restart()
@@ -56,14 +76,6 @@ function action_restart()
 	sys.call("/etc/init.d/zjkju-auth restart >/dev/null 2>&1")
 	http.prepare_content("text/plain; charset=utf-8")
 	http.write("服务已重启")
-end
-
-function action_clear_log()
-	local http = require "luci.http"
-	local fs = require "nixio.fs"
-	fs.writefile(LOG_FILE, "")
-	http.prepare_content("application/json")
-	http.write('{"ok":true}')
 end
 
 function action_status()
@@ -88,7 +100,6 @@ function action_status()
 	})
 end
 
--- 解析带 -r 的版本
 local function get_installed_version()
 	local sys = require "luci.sys"
 	local v = sys.exec("opkg status luci-app-zjkju-auth 2>/dev/null | grep '^Version:' | awk '{print $2}'")
@@ -247,10 +258,14 @@ for P in $PROXIES; do
             apk add --allow-untrusted "$TARGET" >/dev/null 2>&1
         fi
         rm -f "$TARGET"
+        rm -f "$0" # 安装成功，删除自身脚本
         /etc/init.d/zjkju-auth restart >/dev/null 2>&1
         exit 0
     fi
 done
+# 走到这里说明所有代理全部失败，强制清理残缺文件和自身
+rm -f "$TARGET"
+rm -f "$0"
 exit 1
 ]], url, ext)
 	fs.writefile(bg_script, script_content)
