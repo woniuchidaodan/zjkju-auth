@@ -15,7 +15,9 @@ do
 	if clean_v ~= "" then PKG_VERSION = clean_v end
 end
 
-m = Map("zjkju-auth", translate("ZJKJU 校园网认证"),
+-- 【修复】将版本号拼接到大标题后面
+m = Map("zjkju-auth", 
+	translate("ZJKJU 校园网认证") .. " <span style='font-size:12px; color:#888; font-weight:normal; margin-left:8px;'>Version: " .. PKG_VERSION .. "</span>",
 	translate("在路由器上自动完成校园网 ePortal 认证。填写学号和密码后，勾选“启用”并保存。"))
 
 s = m:section(NamedSection, "main", "zjkju-auth", translate("认证设置"))
@@ -36,7 +38,7 @@ o.datatype = "string"
 o.rmempty = false
 
 o = s:taboption("basic", Value, "password", translate("密码"),
-	translate("密码，初始为身份证后六位"))
+	translate("校密码，初始为身份证后六位"))
 o.password = true
 o.datatype = "string"
 o.rmempty = false
@@ -195,7 +197,6 @@ function m.on_after_commit(self)
 	local uci2 = require("luci.model.uci").cursor()
 	local enabled = uci2:get("zjkju-auth", "main", "enabled")
 	
-	-- 完美修复：先停，后台等 1 秒再启动，彻底避开 uci 延迟与 procd 死区
 	if enabled == "1" or enabled == "on" or enabled == "true" or enabled == "yes" or enabled == "enabled" then
 		luci.sys.call("/etc/init.d/zjkju-auth enable >/dev/null 2>&1")
 		luci.sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
