@@ -35,7 +35,8 @@ log_msg() {
     logger -t zjkju-auth "$1"
 }
 
-trap 'log_msg "收到停止信号，服务退出"; exit 0' TERM INT
+# 【修改】静默退出，不写日志
+trap 'exit 0' TERM INT
 
 set_status() { echo "$1" > "$STATUS_FILE"; }
 log_msg "wrapper started"
