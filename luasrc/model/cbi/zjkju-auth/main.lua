@@ -4,7 +4,7 @@ local sys       = require "luci.sys"
 local disp      = require "luci.dispatcher"
 
 local m, s, o
-local PKG_VERSION = "1.0.4-r5"
+local PKG_VERSION = "1.0.4-r6"
 do
 	local v = sys.exec("opkg status luci-app-zjkju-auth 2>/dev/null | grep '^Version:' | awk '{print $2}'")
 	if not v or v == "" then
@@ -80,7 +80,7 @@ o.default = [=[
 
 <div id="zjkju-update-modal" class="zjkju-modal-overlay">
 	<div class="zjkju-modal">
-		<div class="zjkju-modal-header">发现新版本 <span id="zjkju-new-ver"></span></div>
+		<div class="zjkju-modal-header">发现新版本 <span id="zjkju-new-ver"></span> <span id="zjkju-beta-tag" style="display:none; color:red; font-size:12px;">(测试版)</span></div>
 		<div class="zjkju-modal-body" id="zjkju-update-body"></div>
 		<div class="zjkju-modal-footer">
 			<button type="button" class="cbi-button" onclick="zjkjuCloseUpdateModal()">暂不更新</button>
@@ -124,6 +124,14 @@ function doZjkjuCheck(isSilent) {
 			if (dot) dot.style.display = 'inline-block';
 			zjkjuUpdateData = data;
 			document.getElementById('zjkju-new-ver').textContent = 'v' + data.latest_version;
+			
+			var betaTag = document.getElementById('zjkju-beta-tag');
+			if (data.prerelease) {
+				betaTag.style.display = 'inline';
+			} else {
+				betaTag.style.display = 'none';
+			}
+
 			document.getElementById('zjkju-update-body').textContent = data.body || '';
 			if (!isSilent) {
 				document.getElementById('zjkju-update-modal').style.display = 'block';
@@ -186,9 +194,12 @@ sec.template = "zjkju-auth/log"
 function m.on_after_commit(self)
 	local uci2 = require("luci.model.uci").cursor()
 	local enabled = uci2:get("zjkju-auth", "main", "enabled")
+	
+	-- 完美修复：先停，后台等 1 秒再启动，彻底避开 uci 延迟与 procd 死区
 	if enabled == "1" or enabled == "on" or enabled == "true" or enabled == "yes" or enabled == "enabled" then
 		luci.sys.call("/etc/init.d/zjkju-auth enable >/dev/null 2>&1")
-		luci.sys.call("/etc/init.d/zjkju-auth restart >/dev/null 2>&1")
+		luci.sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
+		luci.sys.call("(sleep 1; /etc/init.d/zjkju-auth start) >/dev/null 2>&1 &")
 	else
 		luci.sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
 		luci.sys.call("/etc/init.d/zjkju-auth disable >/dev/null 2>&1")
