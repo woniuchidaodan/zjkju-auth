@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-zjkju-auth
 PKG_VERSION:=1.0.4
-PKG_RELEASE:=4
+PKG_RELEASE:=5
 
 LUCI_TITLE:=LuCI app for ZJKJU Ruijie ePortal authentication
 LUCI_DESCRIPTION:=A LuCI application that keeps ZJKJU campus network logged in via Ruijie ePortal web authentication.
@@ -15,7 +15,7 @@ define Package/luci-app-zjkju-auth/postinst
 #!/bin/sh
 [ -z "$${IPKG_INSTROOT}" ] || exit 0
 
-# 1. 保护配置文件（防覆盖丢失密码）
+# 保护配置文件（防覆盖丢失密码）
 [ -f /etc/config/zjkju-auth ] || cat > /etc/config/zjkju-auth <<EOF
 config zjkju-auth 'main'
 	option enabled '0'
@@ -27,24 +27,22 @@ config zjkju-auth 'main'
 EOF
 chmod 600 /etc/config/zjkju-auth
 
-# 2. 彻底清理旧版本的所有日志、状态、缓存，全新开始
+# 彻底清理旧版本的所有日志、状态、缓存
 rm -rf /var/log/zjkju-auth
 rm -f /var/log/zjkju-auth.log
 rm -f /tmp/zjkju-auth-status
 rm -f /tmp/zjkju-auth-last-url
 rm -f /tmp/zjkju-auth-online-printed
-rm -f /tmp/zjkju-auth-cleared
-# 【新增】清理可能残存的更新脚本和未下载完的安装包
 rm -f /tmp/zjkju_do_update.sh
 rm -f /tmp/zjkju_auth_update.*
 mkdir -p /var/log/zjkju-auth
 
-# 3. 刷新 LuCI 缓存
+# 刷新 LuCI 缓存
 rm -f /tmp/luci-indexcache.*
 rm -rf /tmp/luci-modulecache/
 /etc/init.d/rpcd reload 2>/dev/null
 
-# 4. 重启服务
+# 重启服务
 if [ -f /etc/init.d/zjkju-auth ]; then
     /etc/init.d/zjkju-auth restart >/dev/null 2>&1 || true
 fi
