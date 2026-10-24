@@ -154,8 +154,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
-          TAG="v${{ needs.build.outputs.pkg_version }}"
-          TITLE="luci-app-zjkju-auth ${{ needs.build.outputs.pkg_version }}"
+          # 强制在版本号后加上 beta 标识，防止与正式版冲突
+          TAG="v${{ needs.build.outputs.pkg_version }}-beta"
+          TITLE="luci-app-zjkju-auth ${{ needs.build.outputs.pkg_version }} Beta"
 
           echo "==== 删除旧 Release (如果存在) ===="
           gh release delete "$TAG" --repo "$REPO" --yes --cleanup-tag 2>/dev/null || echo "旧 Release 不存在"
@@ -164,37 +165,24 @@ jobs:
           gh release create "$TAG" \
             --repo "$REPO" \
             --title "$TITLE" \
-            --notes "## luci-app-zjkju-auth ${{ needs.build.outputs.pkg_version }}
+            --prerelease \
+            --notes "## luci-app-zjkju-auth ${{ needs.build.outputs.pkg_version }} (Beta 测试版)
 
           湛江科技学院锐捷 ePortal 校园网自动认证的 LuCI 应用。
 
           ### 📋 版本信息
-          - 版本: \`v${{ needs.build.outputs.pkg_version }}\`
+          - 版本: \`v${{ needs.build.outputs.pkg_version }}-beta\`
           - 包架构: **all（全架构通用）**
           - 目标平台: ImmortalWrt / OpenWrt
+          - **⚠️ 注意：本版本为 Beta 测试版，可能存在未知风险，建议优先在测试环境中使用。**
 
-          ### 🚀 1.0.4-r2 核心更新（终极定稿版）
-
-          **✨ 回归初衷与极致纯净**
-          - **极简日志**：严格遵循最初设计，仅在状态发生变化（启动、掉线、认证成功、恢复）时输出日志，持续在线时绝对静默。
-          - **时间校准**：开机启动时静默等待 NTP 同步，彻底解决重启后日志出现“穿越日期”的历史遗留问题。
-
-          **🛡️ 顶级护盾与静默防抖**
-          - **10秒静默防抖**：掉线后不盲目发包，静默等待 10 秒。若网络闪断自动恢复则不触发多余认证，大幅减少锐捷网关的 \`mac collision\` 报错。
-          - **彻底清理旧文件**：每次覆盖升级，自动清空旧的日志、缓存与状态文件，让新版本在绝对干净的环境中运行，无任何历史包袱。
-          - **瞬间重启**：加入 \`trap\` 信号捕获，重启或更新时无需等待 \`sleep\` 结束，服务秒起。
-
-          **🚀 智能一键更新与未来布局**
-          - **安全极速**：支持在“其他设置”页面一键弹窗更新。预埋了多代理池加速，完美解决校园网访问 GitHub 缓慢的问题。
-          - **分架构智能感知**：底层已预埋针对不同 CPU 架构（如 aarch64, mipsel）的包识别逻辑，为未来的多架构二进制核心铺平道路。
-          - **红点提示**：页面加载时自动静默检测，有新版本时按钮亮起红点，不打扰用户。
+          ### 🚀 核心更新
+          - **修复稳定性偶现问题**：优化了内部请求逻辑与状态处理，大幅降低了偶发性的断开或重连失败问题。
+          - **提升使用体验**：更新了底层控制器的响应速度，减少无谓等待，使认证与更新过程更加顺滑。
 
           ---
 
-          ### ⚠️ 重要升级说明
-          由于旧版本（1.0.3 或早期 1.0.4-r1）代码逻辑缺陷，旧版本的“检查更新”按钮可能无法检测到本版本的更新。
-          **如果您是旧版本用户，请手动下载本页的安装包进行最后一次安装。**
-          安装本版本后，未来的所有版本（包括 r1、r2 或跨大版本）均可直接在网页端无脑一键更新！"
+        
 
           echo "==== 上传所有包 ===="
           gh release upload "$TAG" \
