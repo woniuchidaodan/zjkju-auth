@@ -182,7 +182,28 @@ jobs:
 
           ---
 
-        
+          ### 📦 安装说明
+
+          **方式一：opkg（旧版本系统）**
+          \`\`\`bash
+          scp luci-app-zjkju-auth_*.ipk root@192.168.1.1:/tmp/
+          ssh root@192.168.1.1
+          opkg update
+          opkg install luci-compat curl
+          opkg install /tmp/luci-app-zjkju-auth_*.ipk
+          \`\`\`
+
+          **方式二：apk（新版本系统）**
+          \`\`\`bash
+          scp luci-app-zjkju-auth_*.apk root@192.168.1.1:/tmp/
+          ssh root@192.168.1.1
+          apk update
+          apk add luci-compat curl
+          apk add --allow-untrusted /tmp/luci-app-zjkju-auth_*.apk
+          \`\`\`
+
+          ### ⚠️ 升级说明
+          覆盖升级将完整保留您的账号、密码与历史配置。"
 
           echo "==== 上传所有包 ===="
           gh release upload "$TAG" \
