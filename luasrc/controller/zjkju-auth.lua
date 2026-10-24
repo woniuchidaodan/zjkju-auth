@@ -13,7 +13,7 @@ local GITHUB_PROXIES = {
 	"https://ghproxy.net/"
 }
 
--- 注意：这里改为了 /releases 接口，支持获取最新发布（含 Pre-release）
+-- 改为 /releases 接口，支持获取最新发布（含 Pre-release 测试版）
 local REPO_API_PATH = "https://api.github.com/repos/woniuchidaodan/zjkju-auth/releases"
 
 local NODE_TIMEOUT_DIRECT = 8
@@ -99,6 +99,10 @@ end
 function action_restart()
 	local http = require "luci.http"
 	local sys = require "luci.sys"
+	
+	-- 记录手动重启的指令日志
+	sys.call("logger -t zjkju-auth '收到来自 LuCI 的重启指令'")
+	
 	sys.call("/etc/init.d/zjkju-auth restart >/dev/null 2>&1")
 	http.prepare_content("text/plain; charset=utf-8")
 	http.write("服务已重启")
@@ -177,7 +181,7 @@ local function fetch_latest_release()
 		local res = sys.exec(cmd)
 		if res and res ~= "" then
 			local ok, parsed = pcall(jsonc.parse, res)
-			-- 注意这里：因为返回的是数组，所以取 parsed[1]
+			-- 取数组第一个
 			if ok and type(parsed) == "table" and parsed[1] and parsed[1].tag_name then
 				return parsed[1]
 			end
@@ -289,7 +293,6 @@ function action_check_update()
 		result.latest_version = latest
 		result.body = rel.body or ""
 		result.download_url = rel.html_url or ""
-		-- 顺便把是否预发布传给前端
 		result.prerelease = rel.prerelease or false
 
 		if compare_version(latest, current) > 0 then
