@@ -96,12 +96,10 @@ function action_clear_log()
 	http.write('{"ok":true}')
 end
 
+-- 【修改】纯粹的重启，不再主动写日志
 function action_restart()
 	local http = require "luci.http"
 	local sys = require "luci.sys"
-	
-	-- 记录手动重启的指令日志
-	sys.call("logger -t zjkju-auth '收到来自 LuCI 的重启指令'")
 	
 	sys.call("/etc/init.d/zjkju-auth restart >/dev/null 2>&1")
 	http.prepare_content("text/plain; charset=utf-8")
@@ -181,7 +179,6 @@ local function fetch_latest_release()
 		local res = sys.exec(cmd)
 		if res and res ~= "" then
 			local ok, parsed = pcall(jsonc.parse, res)
-			-- 取数组第一个
 			if ok and type(parsed) == "table" and parsed[1] and parsed[1].tag_name then
 				return parsed[1]
 			end
