@@ -3,7 +3,7 @@ module("luci.controller.zjkju-auth", package.seeall)
 local STATE_DIR   = "/var/log/zjkju-auth"
 local STATUS_FILE = STATE_DIR .. "/status"
 
-local FALLBACK_VERSION = "1.0.4-r5"
+local FALLBACK_VERSION = "1.0.4-r6"
 
 local GITHUB_PROXIES = {
 	"", -- 优先直连
@@ -12,7 +12,9 @@ local GITHUB_PROXIES = {
 	"https://github.moeyy.xyz/",
 	"https://ghproxy.net/"
 }
-local REPO_API_PATH = "https://api.github.com/repos/woniuchidaodan/zjkju-auth/releases/latest"
+
+-- 注意：这里改为了 /releases 接口，支持获取最新发布（含 Pre-release）
+local REPO_API_PATH = "https://api.github.com/repos/woniuchidaodan/zjkju-auth/releases"
 
 local NODE_TIMEOUT_DIRECT = 8
 local NODE_TIMEOUT_PROXY  = 6
@@ -135,21 +137,35 @@ local function get_installed_version()
 	return (clean_v ~= "" and clean_v) or FALLBACK_VERSION
 end
 
+-- 终极版本比对逻辑
 local function compare_version(v1, v2)
-	v1 = tostring(v1 or ""):gsub("%-r", "."):gsub("%-", ".")
-	v2 = tostring(v2 or ""):gsub("%-r", "."):gsub("%-", ".")
+	if v1 == v2 then return 0 end
+	
+	local n1 = tostring(v1 or ""):gsub("%-r", "."):gsub("%-", "."):gsub("%a", "")
+	local n2 = tostring(v2 or ""):gsub("%-r", "."):gsub("%-", "."):gsub("%a", "")
+	
 	local t1, t2 = {}, {}
-	for n in string.gmatch(v1, "%d+") do t1[#t1 + 1] = tonumber(n) end
-	for n in string.gmatch(v2, "%d+") do t2[#t2 + 1] = tonumber(n) end
+	for n in string.gmatch(n1, "%d+") do t1[#t1 + 1] = tonumber(n) end
+	for n in string.gmatch(n2, "%d+") do t2[#t2 + 1] = tonumber(n) end
 	local mx = math.max(#t1, #t2)
 	for i = 1, mx do
 		local a, b = t1[i] or 0, t2[i] or 0
 		if a > b then return 1 end
 		if a < b then return -1 end
 	end
+	
+	local has_letter_v1 = tostring(v1):match("%a") ~= nil
+	local has_letter_v2 = tostring(v2):match("%a") ~= nil
+	
+	if has_letter_v1 and not has_letter_v2 then
+		return -1
+	elseif not has_letter_v1 and has_letter_v2 then
+		return 1
+	end
 	return 0
 end
 
+-- 获取最新版本（解析 releases 数组）
 local function fetch_latest_release()
 	local sys = require "luci.sys"
 	local jsonc = require "luci.jsonc"
@@ -161,8 +177,9 @@ local function fetch_latest_release()
 		local res = sys.exec(cmd)
 		if res and res ~= "" then
 			local ok, parsed = pcall(jsonc.parse, res)
-			if ok and type(parsed) == "table" and parsed.tag_name then
-				return parsed
+			-- 注意这里：因为返回的是数组，所以取 parsed[1]
+			if ok and type(parsed) == "table" and parsed[1] and parsed[1].tag_name then
+				return parsed[1]
 			end
 		end
 	end
@@ -226,8 +243,9 @@ local function fetch_consensus_digest(ext)
 
 		if res and res ~= "" then
 			local ok, parsed = pcall(jsonc.parse, res)
-			if ok and type(parsed) == "table" and parsed.tag_name then
-				local asset = pick_asset(parsed, ext, sys_archs)
+			if ok and type(parsed) == "table" and parsed[1] and parsed[1].tag_name then
+				local rel = parsed[1]
+				local asset = pick_asset(rel, ext, sys_archs)
 				local d = asset and asset.digest and tostring(asset.digest):gsub("^sha256:", "")
 				local u = asset and asset.browser_download_url
 
@@ -235,7 +253,7 @@ local function fetch_consensus_digest(ext)
 					responses = responses + 1
 					counted[d] = (counted[d] or 0) + 1
 					urls[d] = u
-					tags[d] = tostring(parsed.tag_name)
+					tags[d] = tostring(rel.tag_name)
 				end
 			end
 		end
@@ -271,6 +289,9 @@ function action_check_update()
 		result.latest_version = latest
 		result.body = rel.body or ""
 		result.download_url = rel.html_url or ""
+		-- 顺便把是否预发布传给前端
+		result.prerelease = rel.prerelease or false
+
 		if compare_version(latest, current) > 0 then
 			result.has_update = true
 		end
