@@ -4,19 +4,18 @@ local sys       = require "luci.sys"
 local disp      = require "luci.dispatcher"
 
 local m, s, o
-local PKG_VERSION = "1.0.4-r4"
+local PKG_VERSION = "1.0.4-r5"
 do
 	local v = sys.exec("opkg status luci-app-zjkju-auth 2>/dev/null | grep '^Version:' | awk '{print $2}'")
 	if not v or v == "" then
 		v = sys.exec("apk info -v luci-app-zjkju-auth 2>/dev/null | head -n1 | cut -d'-' -f2-")
 	end
 	v = (v or ""):gsub("%s+", "")
-	local clean_v = v:match("([0-9%.]+%-r[0-9]+)") or v:match("([0-9%.]+)") or ""
+	local clean_v = v:match("([0-9%.]+%-r[0-9]+%a*)") or v:match("([0-9%.]+)") or ""
 	if clean_v ~= "" then PKG_VERSION = clean_v end
 end
 
-m = Map("zjkju-auth", 
-	translate("ZJKJU 校园网认证") .. " <span style='font-size:12px; color:#888; font-weight:normal; margin-left:8px;'>Version: " .. PKG_VERSION .. "</span>",
+m = Map("zjkju-auth", translate("ZJKJU 校园网认证"),
 	translate("在路由器上自动完成校园网 ePortal 认证。填写学号和密码后，勾选“启用”并保存。"))
 
 s = m:section(NamedSection, "main", "zjkju-auth", translate("认证设置"))
@@ -58,10 +57,10 @@ o = s:taboption("basic", Value, "manual_url", translate("手动认证地址"),
 o.datatype = "string"
 o.rmempty = true
 
-o = s:taboption("other", DummyValue, "_log_location", translate("日志文件"))
+o = s:taboption("other", DummyValue, "_log_location", translate("日志来源"))
 o.rawhtml = true
-o.default = "<code>/var/log/zjkju-auth/auth.log</code>"
-o.description = translate("默认 /var/log/zjkju-auth/auth.log。同目录下还有 status、last-url 等运行时文件")
+o.default = "<code>syslog（logread -e zjkju-auth）</code>"
+o.description = translate("日志统一写入系统日志，仅由 logd 管理，不落盘。状态文件位于 /var/log/zjkju-auth/")
 
 local checkUrl    = disp.build_url("admin", "services", "zjkju-auth", "check_update")
 local doUpdateUrl = disp.build_url("admin", "services", "zjkju-auth", "do_update")
@@ -149,15 +148,23 @@ window.zjkjuInstallUpdate = function() {
 	var btn = document.getElementById('zjkju-btn-do-update');
 	if (!btn) return;
 	btn.disabled = true;
-	var count = 15; 
+	var count = 30; 
 	btn.textContent = '后台下载安装中 (' + count + 's)...';
 	XHR.post(zjkjuDoUrl, { token: zjkjuToken }, function(x) {
 		if (x && x.status === 200) {
+			var res = null;
+			try { res = JSON.parse(x.responseText); } catch(e) {}
+			if (res && !res.success) {
+				alert('更新失败: ' + (res.error || '未知错误'));
+				btn.disabled = false;
+				btn.textContent = '立即更新';
+				return;
+			}
 			var timer = setInterval(function() {
 				count--;
 				if (count <= 0) {
 					clearInterval(timer);
-					btn.textContent = '安装完成，正在刷新...';
+					btn.textContent = '安装可能已完成，正在刷新...';
 					window.location.reload(); 
 				} else {
 					btn.textContent = '后台下载安装中 (' + count + 's)...';
@@ -181,8 +188,7 @@ function m.on_after_commit(self)
 	local enabled = uci2:get("zjkju-auth", "main", "enabled")
 	if enabled == "1" or enabled == "on" or enabled == "true" or enabled == "yes" or enabled == "enabled" then
 		luci.sys.call("/etc/init.d/zjkju-auth enable >/dev/null 2>&1")
-		luci.sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
-		luci.sys.call("(sleep 1; /etc/init.d/zjkju-auth start) >/dev/null 2>&1 &")
+		luci.sys.call("/etc/init.d/zjkju-auth restart >/dev/null 2>&1")
 	else
 		luci.sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
 		luci.sys.call("/etc/init.d/zjkju-auth disable >/dev/null 2>&1")
