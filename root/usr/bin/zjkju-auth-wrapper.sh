@@ -9,8 +9,8 @@ ONLINE_FLAG="$STATE_DIR/online-printed"
 STATUS_FILE="$STATE_DIR/status"
 
 mkdir -p "$STATE_DIR"
-rm -f /tmp/zjkju-auth-cleared
 
+# 冷却变量
 FAIL_COUNT=0
 MAX_FAIL=3
 FAIL_COOLDOWN_SEC=300
@@ -31,7 +31,6 @@ NOCONFIG_LOGGED=0
 
 . /lib/functions.sh
 
-# 【灵魂回归】：纯 logger，时间永远由 logd 校准，绝不穿越
 log_msg() {
     logger -t zjkju-auth "$1"
 }
@@ -40,6 +39,43 @@ trap 'log_msg "收到停止信号，服务退出"; exit 0' TERM INT
 
 set_status() { echo "$1" > "$STATUS_FILE"; }
 log_msg "wrapper started"
+
+# ==========================================
+# 智能对时函数（仅在时钟异常且网络已通时执行）
+# ==========================================
+clock_is_bad() {
+    local y
+    y=$(date +%Y 2>/dev/null)
+    [ -n "$y" ] && [ "$y" -lt 2024 ] 2>/dev/null
+}
+
+do_ntp_sync() {
+    log_msg "系统时钟异常（$(date +%Y 2>/dev/null)），尝试对时"
+
+    if command -v ntpd >/dev/null 2>&1; then
+        ntpd -n -q -p ntp.aliyun.com -p ntp.tencent.com -p pool.ntp.org >/dev/null 2>&1 &
+        NTP_PID=$!
+        i=0
+        while [ "$i" -lt 5 ]; do
+            sleep 1
+            clock_is_bad || break
+            i=$((i + 1))
+        done
+        kill "$NTP_PID" 2>/dev/null
+        wait "$NTP_PID" 2>/dev/null
+    fi
+
+    if clock_is_bad; then
+        if [ -x /etc/init.d/sysntpd ]; then
+            /etc/init.d/sysntpd restart >/dev/null 2>&1
+            log_msg "未找到 ntpd 或对时未成功，已交给系统 sysntpd 继续尝试"
+        else
+            log_msg "对时未成功，继续运行（日志时间可能不准）"
+        fi
+    else
+        log_msg "对时成功：$(date '+%Y-%m-%d %H:%M:%S')"
+    fi
+}
 
 normalize_interval() {
     local v="$1"
@@ -125,7 +161,8 @@ do_auth() {
     case "$RESPONSE" in
         *'"result":"success"'*) log_msg "认证成功！"; return 0 ;;
         *'"result":"fail"'*)
-            MSG=$(echo "$RESPONSE" | grep -oE '"message":"[^"]+"' | head -1)
+            MSG=$(echo "$RESPONSE" | sed -n 's/.*"message":"\([^"]*\)".*/\1/p')
+            [ -z "$MSG" ] && MSG="未知错误"
             log_msg "认证失败: $MSG"
             return 1 ;;
         *) log_msg "认证请求已提交（响应无法识别）"; return 2 ;;
@@ -159,6 +196,7 @@ cooldown_wait() {
 
 STATE="init"
 EVER_ONLINE=0
+NTP_TRIED=0
 
 while true; do
     config_load zjkju-auth
@@ -181,7 +219,6 @@ while true; do
     fi
     NOCONFIG_LOGGED=0
 
-    # 清理 6 小时以上未更新的缓存
     if [ -f "$CACHE_FILE" ]; then
         NOW=$(date +%s); FILE_TIME=$(date -r "$CACHE_FILE" +%s 2>/dev/null)
         if [ -n "$FILE_TIME" ] && [ "$FILE_TIME" -gt 0 ] 2>/dev/null; then
@@ -192,9 +229,14 @@ while true; do
         fi
     fi
 
-    # ============ 在线 ============
     if is_online; then
         set_status "online"
+
+        if [ "$NTP_TRIED" -lt 3 ] && clock_is_bad; then
+            NTP_TRIED=$((NTP_TRIED + 1))
+            do_ntp_sync
+        fi
+
         if [ ! -f "$ONLINE_FLAG" ]; then
             case "$STATE" in
                 init) log_msg "已联网，无需认证" ;;
@@ -208,11 +250,9 @@ while true; do
         sleep "$check_interval"; continue
     fi
 
-    # ============ 离线 ============
     set_status "offline"
     rm -f "$ONLINE_FLAG"
 
-    # 10秒防抖确认机制（静默）
     if [ "$STATE" = "online" ]; then
         sleep 10
         if is_online; then
