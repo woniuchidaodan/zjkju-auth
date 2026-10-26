@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-zjkju-auth
 PKG_VERSION:=1.0.4
-PKG_RELEASE:=6
+PKG_RELEASE:=7
 
 LUCI_TITLE:=LuCI app for ZJKJU Ruijie ePortal authentication
 LUCI_DESCRIPTION:=A LuCI application that keeps ZJKJU campus network logged in via Ruijie ePortal web authentication.
@@ -15,7 +15,6 @@ define Package/luci-app-zjkju-auth/postinst
 #!/bin/sh
 [ -z "$${IPKG_INSTROOT}" ] || exit 0
 
-# 保护配置文件（防覆盖丢失密码）
 [ -f /etc/config/zjkju-auth ] || cat > /etc/config/zjkju-auth <<EOF
 config zjkju-auth 'main'
 	option enabled '0'
@@ -27,7 +26,6 @@ config zjkju-auth 'main'
 EOF
 chmod 600 /etc/config/zjkju-auth
 
-# 彻底清理旧版本的所有日志、状态、缓存
 rm -rf /var/log/zjkju-auth
 rm -f /var/log/zjkju-auth.log
 rm -f /tmp/zjkju-auth-status
@@ -37,12 +35,10 @@ rm -f /tmp/zjkju_do_update.sh
 rm -f /tmp/zjkju_auth_update.*
 mkdir -p /var/log/zjkju-auth
 
-# 刷新 LuCI 缓存
 rm -f /tmp/luci-indexcache.*
 rm -rf /tmp/luci-modulecache/
 /etc/init.d/rpcd reload 2>/dev/null
 
-# 重启服务
 if [ -f /etc/init.d/zjkju-auth ]; then
     /etc/init.d/zjkju-auth restart >/dev/null 2>&1 || true
 fi
@@ -69,6 +65,10 @@ define Package/luci-app-zjkju-auth/install
 	$(INSTALL_DATA) ./luasrc/model/cbi/zjkju-auth/main.lua $(1)/usr/lib/lua/luci/model/cbi/zjkju-auth/main.lua
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/zjkju-auth
 	$(INSTALL_DATA) ./luasrc/view/zjkju-auth/log.htm $(1)/usr/lib/lua/luci/view/zjkju-auth/log.htm
+endef
+
+define Package/luci-app-zjkju-auth/conffiles
+/etc/config/zjkju-auth
 endef
 
 $(eval $(call BuildPackage,luci-app-zjkju-auth))
