@@ -33,6 +33,7 @@ rm -f /tmp/zjkju-auth-last-url
 rm -f /tmp/zjkju-auth-online-printed
 rm -f /tmp/zjkju_do_update.sh
 rm -f /tmp/zjkju_auth_update.*
+rm -f /tmp/zjkju_update_status
 mkdir -p /var/log/zjkju-auth
 
 rm -f /tmp/luci-indexcache.*
