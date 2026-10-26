@@ -225,7 +225,7 @@ sec.template = "zjkju-auth/log"
 function m.on_after_commit(self)
 	local u = self.uci
 	
-	-- 留空字段 → 物理删除，不留空 option
+	-- 核心修复：如果用户清空了表单，强制 UCI 底层物理删除，不留空节点（双层保险）
 	local user = u:get("zjkju-auth", "main", "username")
 	if not user or user == "" then u:delete("zjkju-auth", "main", "username") end
 
@@ -235,15 +235,18 @@ function m.on_after_commit(self)
 	local manual = u:get("zjkju-auth", "main", "manual_url")
 	if not manual or manual == "" then u:delete("zjkju-auth", "main", "manual_url") end
 
-	u:commit("zjkju-auth")
-
+	-- 移除手动 u:commit()，依靠 CBI 原生提交流程，避免打断读秒遮罩
+	
 	local enabled = u:get("zjkju-auth", "main", "enabled")
 
 	if enabled == "1" or enabled == "on" or enabled == "true" or enabled == "yes" or enabled == "enabled" then
 		luci.sys.call("/etc/init.d/zjkju-auth enable >/dev/null 2>&1")
-		-- 间隔放在 stop 和 start 之间，避开 procd 回收竞态
 		luci.sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
-		luci.sys.call("(sleep 1; /etc/init.d/zjkju-auth start >/dev/null 2>&1 || logger -t zjkju-auth 'start after commit failed') >/dev/null 2>&1 &")
+		
+		-- 核心修复：同步阻塞 1 秒，强制触发前端“正在等待配置被应用...”的读秒遮罩，同时避开 procd 竞态
+		luci.sys.call("sleep 1")
+		
+		luci.sys.call("/etc/init.d/zjkju-auth start >/dev/null 2>&1 || logger -t zjkju-auth 'start after commit failed'")
 	else
 		-- 强制停止：断自启 → 停实例 → 让 procd 忘记 → 强杀 → 清残留
 		luci.sys.call("/etc/init.d/zjkju-auth disable >/dev/null 2>&1")
@@ -253,6 +256,9 @@ function m.on_after_commit(self)
 		luci.sys.call("killall -9 zjkju-auth-wrapper.sh zjkju-auth-wrapper 2>/dev/null")
 		luci.sys.call("rm -f /var/log/zjkju-auth/status /var/log/zjkju-auth/last-url /var/log/zjkju-auth/online-printed 2>/dev/null")
 		luci.sys.call("rm -f /tmp/zjkju_do_update.sh /tmp/zjkju_update_status 2>/dev/null")
+		
+		-- 同步睡眠，展示读秒
+		luci.sys.call("sleep 1")
 	end
 end
 
