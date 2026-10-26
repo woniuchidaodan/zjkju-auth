@@ -364,7 +364,6 @@ function action_do_update()
 		return
 	end
 
-	-- 防降级守卫（此时 tag 是真实版本号）
 	local latest = tostring(tag or ""):gsub("^v", "")
 	if latest == "" or compare_version(latest, get_installed_version()) <= 0 then
 		http.write_json({ success = false, error = "当前已是最新版本，无需更新" })
