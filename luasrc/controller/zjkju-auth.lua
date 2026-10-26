@@ -1,20 +1,20 @@
 module("luci.controller.zjkju-auth", package.seeall)
 
 local STATE_DIR   = "/var/log/zjkju-auth"
+local LOG_FILE    = STATE_DIR .. "/auth.log"
 local STATUS_FILE = STATE_DIR .. "/status"
 
-local FALLBACK_VERSION = "1.0.4-r6"
+local FALLBACK_VERSION = "1.0.4-r7"
 
 local GITHUB_PROXIES = {
-	"", -- 优先直连
+	"",
 	"https://gh-proxy.com/",
 	"https://ghfast.top/",
 	"https://github.moeyy.xyz/",
 	"https://ghproxy.net/"
 }
 
--- 改为 /releases 接口，支持获取最新发布（含 Pre-release 测试版）
-local REPO_API_PATH = "https://api.github.com/repos/woniuchidaodan/zjkju-auth/releases"
+local REPO_API_PATH = "https://api.github.com/repos/woniuchidaodan/zjkju-auth/releases/latest"
 
 local NODE_TIMEOUT_DIRECT = 8
 local NODE_TIMEOUT_PROXY  = 6
@@ -36,71 +36,50 @@ function index()
 	entry({"admin", "services", "zjkju-auth", "do_update"}, call("action_do_update")).leaf = true
 end
 
--- 纯读模式：只读取 syslog，不再写文件
 function action_get_log()
 	local http = require "luci.http"
-	local sys = require "luci.sys"
+	local fs = require "nixio.fs"
 
 	http.prepare_content("text/plain; charset=utf-8")
 
-	local logs = sys.exec("logread -e zjkju-auth 2>/dev/null")
-	if not logs or logs == "" then
-		if sys.call("pidof logd >/dev/null 2>&1") ~= 0 then
-			http.write("（系统 logd 未运行，日志无法采集。请检查 /etc/config/system 的 log_size）")
-		else
-			http.write("（暂无日志：服务可能未启动过）")
-		end
+	if not fs.access(LOG_FILE) then
+		http.write("（暂无日志，服务可能还未启动过）")
 		return
 	end
 
-	local sep = "==================== 日志已清空 ===================="
-	local _, e = logs:find(".*" .. sep)
-	if e then
-		logs = logs:sub(e + 1)
+	local data = fs.readfile(LOG_FILE) or ""
+	if data == "" then
+		http.write("（日志文件为空）")
+		return
 	end
 
-	local clean_lines = {}
-	local months = {
-		Jan="01",Feb="02",Mar="03",Apr="04",May="05",Jun="06",
-		Jul="07",Aug="08",Sep="09",Oct="10",Nov="11",Dec="12"
-	}
-
-	for line in (logs .. "\n"):gmatch("(.-)\n") do
-		if line ~= "" then
-			local msg = line:match("zjkju%-auth:%s*(.*)") or line
-			local m_str, d_str, t_str, y_str = line:match("(%a+)%s+(%d+)%s+([%d:]+)%s+(%d+)")
-			local clean_line = msg
-			if m_str and months[m_str] and y_str then
-				local mm = months[m_str]
-				local dd = string.format("%02d", tonumber(d_str))
-				clean_line = y_str .. "-" .. mm .. "-" .. dd .. " " .. t_str .. " " .. msg
-			else
-				clean_line = line
-			end
-			table.insert(clean_lines, clean_line)
-		end
+	local lines = {}
+	for line in (data .. "\n"):gmatch("(.-)\n") do
+		if line ~= "" then lines[#lines + 1] = line end
 	end
 
-	local start = math.max(1, #clean_lines - 100 + 1)
+	local start = math.max(1, #lines - 100 + 1)
 	local buf = {}
-	for i = start, #clean_lines do buf[#buf + 1] = clean_lines[i] end
+	for i = start, #lines do buf[#buf + 1] = lines[i] end
 
 	http.write(table.concat(buf, "\n"))
 end
 
 function action_clear_log()
 	local http = require "luci.http"
+	local fs = require "nixio.fs"
 	local sys = require "luci.sys"
-	sys.call("logger -t zjkju-auth '==================== 日志已清空 ===================='")
+	
+	fs.writefile(LOG_FILE, "")
+	sys.call("logger -t zjkju-auth '[系统提示] 用户已手动清空文件日志'")
+	
 	http.prepare_content("application/json")
 	http.write('{"ok":true}')
 end
 
--- 【修改】纯粹的重启，不再主动写日志
 function action_restart()
 	local http = require "luci.http"
 	local sys = require "luci.sys"
-	
 	sys.call("/etc/init.d/zjkju-auth restart >/dev/null 2>&1")
 	http.prepare_content("text/plain; charset=utf-8")
 	http.write("服务已重启")
@@ -139,13 +118,10 @@ local function get_installed_version()
 	return (clean_v ~= "" and clean_v) or FALLBACK_VERSION
 end
 
--- 终极版本比对逻辑
 local function compare_version(v1, v2)
 	if v1 == v2 then return 0 end
-	
 	local n1 = tostring(v1 or ""):gsub("%-r", "."):gsub("%-", "."):gsub("%a", "")
 	local n2 = tostring(v2 or ""):gsub("%-r", "."):gsub("%-", "."):gsub("%a", "")
-	
 	local t1, t2 = {}, {}
 	for n in string.gmatch(n1, "%d+") do t1[#t1 + 1] = tonumber(n) end
 	for n in string.gmatch(n2, "%d+") do t2[#t2 + 1] = tonumber(n) end
@@ -155,19 +131,9 @@ local function compare_version(v1, v2)
 		if a > b then return 1 end
 		if a < b then return -1 end
 	end
-	
-	local has_letter_v1 = tostring(v1):match("%a") ~= nil
-	local has_letter_v2 = tostring(v2):match("%a") ~= nil
-	
-	if has_letter_v1 and not has_letter_v2 then
-		return -1
-	elseif not has_letter_v1 and has_letter_v2 then
-		return 1
-	end
 	return 0
 end
 
--- 获取最新版本（解析 releases 数组）
 local function fetch_latest_release()
 	local sys = require "luci.sys"
 	local jsonc = require "luci.jsonc"
@@ -179,8 +145,8 @@ local function fetch_latest_release()
 		local res = sys.exec(cmd)
 		if res and res ~= "" then
 			local ok, parsed = pcall(jsonc.parse, res)
-			if ok and type(parsed) == "table" and parsed[1] and parsed[1].tag_name then
-				return parsed[1]
+			if ok and type(parsed) == "table" and parsed.tag_name then
+				return parsed
 			end
 		end
 	end
@@ -244,9 +210,8 @@ local function fetch_consensus_digest(ext)
 
 		if res and res ~= "" then
 			local ok, parsed = pcall(jsonc.parse, res)
-			if ok and type(parsed) == "table" and parsed[1] and parsed[1].tag_name then
-				local rel = parsed[1]
-				local asset = pick_asset(rel, ext, sys_archs)
+			if ok and type(parsed) == "table" and parsed.tag_name then
+				local asset = pick_asset(parsed, ext, sys_archs)
 				local d = asset and asset.digest and tostring(asset.digest):gsub("^sha256:", "")
 				local u = asset and asset.browser_download_url
 
@@ -254,7 +219,7 @@ local function fetch_consensus_digest(ext)
 					responses = responses + 1
 					counted[d] = (counted[d] or 0) + 1
 					urls[d] = u
-					tags[d] = tostring(rel.tag_name)
+					tags[d] = tostring(parsed.tag_name)
 				end
 			end
 		end
@@ -290,8 +255,7 @@ function action_check_update()
 		result.latest_version = latest
 		result.body = rel.body or ""
 		result.download_url = rel.html_url or ""
-		result.prerelease = rel.prerelease or false
-
+		
 		if compare_version(latest, current) > 0 then
 			result.has_update = true
 		end
