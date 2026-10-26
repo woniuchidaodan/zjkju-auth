@@ -9,12 +9,10 @@ local FALLBACK_VERSION = "1.0.4-r7"
 local GITHUB_PROXIES = {
 	"",
 	"https://gh-proxy.com/",
-	"https://ghfast.top/",
-	"https://github.moeyy.xyz/",
-	"https://ghproxy.net/"
+	"https://ghfast.top/"
 }
 
-local REPO_API_PATH = "https://api.github.com/repos/woniuchidaodan/zjkju-auth/releases/latest"
+local REPO_API_PATH = "https://api.github.com/repos/woniuchidaodan/zjkju-auth/releases?per_page=10"
 
 local NODE_TIMEOUT_DIRECT = 8
 local NODE_TIMEOUT_PROXY  = 6
@@ -147,23 +145,59 @@ local function compare_version(v1, v2)
 	return 0
 end
 
+local function beta_enabled()
+	local ok, uci = pcall(require, "luci.model.uci")
+	if not ok then return false end
+	return uci.cursor():get("zjkju-auth", "main", "beta_channel") == "1"
+end
+
+local function pick_newest(parsed)
+	local allow_beta = beta_enabled()
+	if type(parsed) ~= "table" then return nil end
+	if parsed.tag_name then
+		if not allow_beta and parsed.prerelease then return nil end
+		return parsed
+	end
+
+	local best = nil
+	for _, r in ipairs(parsed) do
+		if type(r) == "table" and r.tag_name and not r.draft then
+			if allow_beta or not r.prerelease then
+				if not best then
+					best = r
+				else
+					local c = compare_version(r.tag_name, best.tag_name)
+					if c > 0 or (c == 0 and best.prerelease and not r.prerelease) then
+						best = r
+					end
+				end
+			end
+		end
+	end
+	return best
+end
+
 local function fetch_latest_release()
 	local sys = require "luci.sys"
 	local jsonc = require "luci.jsonc"
 	local ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+	local answered = false
+	
 	for _, proxy in ipairs(GITHUB_PROXIES) do
-		local full_url = proxy .. REPO_API_PATH
 		local max_time = (proxy == "") and NODE_TIMEOUT_DIRECT or NODE_TIMEOUT_PROXY
-		local cmd = string.format("curl -sS --fail --max-time %d -H 'User-Agent: %s' '%s'", max_time, ua, full_url)
+		local cmd = string.format("curl -sS --fail --max-time %d -H 'User-Agent: %s' '%s'",
+			max_time, ua, proxy .. REPO_API_PATH)
 		local res = sys.exec(cmd)
 		if res and res ~= "" then
 			local ok, parsed = pcall(jsonc.parse, res)
-			if ok and type(parsed) == "table" and parsed.tag_name then
-				return parsed
+			if ok then
+				answered = true
+				local rel = pick_newest(parsed)
+				if rel then return rel, answered end
 			end
 		end
 	end
-	return nil
+	return nil, answered
 end
 
 local function get_system_archs()
@@ -202,53 +236,74 @@ local function pick_asset(rel, ext, sys_archs)
 	return nil
 end
 
-local function fetch_consensus_digest(ext)
+local function fetch_one(proxy, ext, sys_archs)
 	local sys = require "luci.sys"
 	local jsonc = require "luci.jsonc"
 	local ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+	local timeout = (proxy == "") and NODE_TIMEOUT_DIRECT or NODE_TIMEOUT_PROXY
+	local cmd = string.format("curl -sS --fail --max-time %d -H 'User-Agent: %s' '%s'",
+		timeout, ua, proxy .. REPO_API_PATH)
+
+	local res = sys.exec(cmd)
+	if not res or res == "" then return nil end
+
+	local ok, parsed = pcall(jsonc.parse, res)
+	if not ok then return nil end
+
+	local rel = pick_newest(parsed)
+	if not rel then return nil end
+
+	local asset = pick_asset(rel, ext, sys_archs)
+	local d = asset and asset.digest and tostring(asset.digest):gsub("^sha256:", "")
+	local u = asset and asset.browser_download_url
+
+	if not (d and d:match("^%x+$") and #d == 64 and u and u:match(ASSET_URL_RE)) then
+		return nil
+	end
+	return d, u, tostring(rel.tag_name)
+end
+
+local function fetch_consensus_digest(ext)
 	local sys_archs = get_system_archs()
-	local counted, urls, tags = {}, {}, {}
-	local responses = 0
 	local started = os.time()
 
+	-- 直连优先，并返回真实 tag
+	local d, u, t = fetch_one("", ext, sys_archs)
+	if d then
+		return d, u, nil, t
+	end
+
+	-- 代理共识
+	local votes, urls, tags, responses = {}, {}, {}, 0
+
 	for _, proxy in ipairs(GITHUB_PROXIES) do
-		if os.time() - started >= CONSENSUS_BUDGET then break end
+		if proxy ~= "" then
+			if os.time() - started >= CONSENSUS_BUDGET then break end
 
-		local timeout = (proxy == "") and NODE_TIMEOUT_DIRECT or NODE_TIMEOUT_PROXY
-		local full_url = proxy .. REPO_API_PATH
-		local cmd = string.format("curl -sS --fail --max-time %d -H 'User-Agent: %s' '%s'",
-			timeout, ua, full_url)
-		local res = sys.exec(cmd)
-
-		if res and res ~= "" then
-			local ok, parsed = pcall(jsonc.parse, res)
-			if ok and type(parsed) == "table" and parsed.tag_name then
-				local asset = pick_asset(parsed, ext, sys_archs)
-				local d = asset and asset.digest and tostring(asset.digest):gsub("^sha256:", "")
-				local u = asset and asset.browser_download_url
-
-				if d and d:match("^%x+$") and #d == 64 and u and u:match(ASSET_URL_RE) then
-					responses = responses + 1
-					counted[d] = (counted[d] or 0) + 1
-					urls[d] = u
-					tags[d] = tostring(parsed.tag_name)
-				end
+			local dd, uu, tt = fetch_one(proxy, ext, sys_archs)
+			if dd then
+				responses = responses + 1
+				votes[dd] = (votes[dd] or 0) + 1
+				urls[dd]  = uu
+				tags[dd]  = tt
 			end
 		end
 	end
 
 	local best, best_n = nil, 0
-	for d, n in pairs(counted) do
-		if n > best_n then best, best_n = d, n end
+	for dd, n in pairs(votes) do
+		if n > best_n then best, best_n = dd, n end
 	end
 
 	if not best then
-		return nil, nil, "所有节点请求均失败或未返回可用校验值，请检查网络或手动下载。"
+		return nil, nil, "直连与所有加速节点均不可用，请检查网络或手动下载。"
 	end
-	-- 修复：只要有至少1个节点成功并返回，且没有多个矛盾结果，就放行
+	if best_n < 2 then
+		return nil, nil, "直连不可用，且只有 1 个加速节点响应，无法交叉验证。请稍后重试或手动下载。"
+	end
 	if best_n < responses then
-		return nil, nil, "多个节点返回的校验值不一致（可能被篡改或缓存不同步），已拒绝自动更新。请重试或手动下载。"
+		return nil, nil, "多个加速节点返回的校验值不一致（可能缓存不同步），请稍后重试。"
 	end
 
 	return best, urls[best], nil, tags[best]
@@ -258,9 +313,13 @@ function action_check_update()
 	local http = require "luci.http"
 	local current = get_installed_version()
 	local result = { current_version = current, has_update = false }
-	local rel = fetch_latest_release()
+	local rel, answered = fetch_latest_release()
 	if not rel then
-		result.error = "所有节点请求失败，请检查外网是否通畅"
+		if answered and not beta_enabled() then
+			result.error = "未找到正式版（当前仅存在测试版）。如需接收测试版，请在“其他设置”中开启。"
+		else
+			result.error = "所有节点请求失败，请检查外网是否通畅"
+		end
 	else
 		local latest = tostring(rel.tag_name):gsub("^v", "")
 		result.latest_version = latest
@@ -299,9 +358,16 @@ function action_do_update()
 	end
 	local ext = has_opkg and "ipk" or "apk"
 
-	local want_hash, url, err = fetch_consensus_digest(ext)
+	local want_hash, url, err, tag = fetch_consensus_digest(ext)
 	if not want_hash then
 		http.write_json({ success = false, error = err })
+		return
+	end
+
+	-- 防降级守卫（此时 tag 是真实版本号）
+	local latest = tostring(tag or ""):gsub("^v", "")
+	if latest == "" or compare_version(latest, get_installed_version()) <= 0 then
+		http.write_json({ success = false, error = "当前已是最新版本，无需更新" })
 		return
 	end
 
@@ -320,7 +386,7 @@ EXT="%s"
 WANT_HASH="%s"
 TARGET="/tmp/zjkju_auth_update.$EXT"
 STATUS_FILE="/tmp/zjkju_update_status"
-PROXIES="/ gh-proxy.com/ ghfast.top/ github.moeyy.xyz/ ghproxy.net/"
+PROXIES="/ gh-proxy.com/ ghfast.top/"
 
 echo "1|下载中" > "$STATUS_FILE"
 
