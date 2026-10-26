@@ -170,42 +170,12 @@ jobs:
 
           湛江科技学院锐捷 ePortal 校园网自动认证的 LuCI 应用。
 
-          ### 📋 版本信息
-          - 版本: \`v${{ needs.build.outputs.pkg_version }}-beta\`
-          - 包架构: **all（全架构通用）**
-          - 目标平台: ImmortalWrt / OpenWrt
-          - **⚠️ 注意：本版本为 Beta 测试版，可能存在未知风险，建议优先在测试环境中使用。**
-
           ### 🚀 核心更新
           - **修复稳定性偶现问题，提升使用体验**
-          - 修复升级后账号、密码被清空的问题
-          - 修复日志偶发消失的问题
-          - 启动速度提升，日志时间更准确
-
-          ---
-
-          ### 📦 安装说明
-
-          **方式一：opkg（旧版本系统）**
-          \`\`\`bash
-          scp luci-app-zjkju-auth_*.ipk root@192.168.1.1:/tmp/
-          ssh root@192.168.1.1
-          opkg update
-          opkg install luci-compat curl
-          opkg install /tmp/luci-app-zjkju-auth_*.ipk
-          \`\`\`
-
-          **方式二：apk（新版本系统）**
-          \`\`\`bash
-          scp luci-app-zjkju-auth_*.apk root@192.168.1.1:/tmp/
-          ssh root@192.168.1.1
-          apk update
-          apk add luci-compat curl
-          apk add --allow-untrusted /tmp/luci-app-zjkju-auth_*.apk
-          \`\`\`
-
-          ### ⚠️ 升级说明
-          覆盖升级将完整保留您的账号、密码与历史配置。"
+          - **修复升级后用户名、密码被清空的问题**
+          - **修复日志偶发消失的问题**
+          - **优化在线更新逻辑，支持直连优先与真实进度显示**
+          - **启动速度提升，日志时间自动校准**"
 
           echo "==== 上传所有包 ===="
           gh release upload "$TAG" \
