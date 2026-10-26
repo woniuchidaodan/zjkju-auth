@@ -63,6 +63,11 @@ o.rawhtml = true
 o.default = "<code>/var/log/zjkju-auth/auth.log</code>"
 o.description = translate("日志统一写入系统日志，同时双写到本地文件。同目录下还有 status、last-url 等运行时文件。")
 
+o = s:taboption("other", Flag, "beta_channel", translate("接收测试版"),
+	translate("开启后会收到标为 pre-release 的版本，仅建议测试用户开启"))
+o.default = 0
+o.rmempty = false
+
 local checkUrl    = disp.build_url("admin", "services", "zjkju-auth", "check_update")
 local doUpdateUrl = disp.build_url("admin", "services", "zjkju-auth", "do_update")
 local statusUrl   = disp.build_url("admin", "services", "zjkju-auth", "update_status")
@@ -153,7 +158,6 @@ window.zjkjuInstallUpdate = function() {
 	btn.disabled = true;
 	btn.textContent = '正在初始化...';
 	
-	// 隐藏弹窗，防止阻挡视线
 	zjkjuCloseUpdateModal();
 	
 	XHR.post(zjkjuDoUrl, { token: zjkjuToken }, function(x) {
@@ -167,7 +171,6 @@ window.zjkjuInstallUpdate = function() {
 				return;
 			}
 			
-			// 开始真实进度轮询
 			var startTime = Math.floor(Date.now() / 1000);
 			var timer = setInterval(function() {
 				var now = Math.floor(Date.now() / 1000);
