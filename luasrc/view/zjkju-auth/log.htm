@@ -10,7 +10,6 @@ end
 if not log or log == "" then
 	log = "（暂无日志，服务可能还未启动过）"
 else
-	-- 只取最后 100 行
 	local lines = {}
 	for line in (log .. "\n"):gmatch("(.-)\n") do
 		if line ~= "" then lines[#lines + 1] = line end
@@ -175,7 +174,6 @@ end
 					setBadge(daemonBadge, '<%:未运行%>', 'zjkju-badge-stopped');
 				}
 
-				// enabled 先判：关掉开关后服务不会启动，只看 running 会显示"未知"
 				if (data.enabled !== "1") {
 					setBadge(netBadge, '<%:已禁用%>', 'zjkju-badge-disabled');
 				} else if (!data.running) {
@@ -212,10 +210,10 @@ end
 
 	window.zjkjuClearLog = function() {
 		if (!confirm('<%:确定要清空日志吗？%>')) return;
-		XHR.get(clearUrl, null, function() {
-			setTimeout(function() {
-				logBox.textContent = '（日志已清空）';
-			}, 1000);
+		XHR.get(clearUrl, null, function(x) {
+			if (x && x.status === 200) {
+				logBox.textContent = '（日志文件已被物理清空）';
+			}
 		});
 	};
 
