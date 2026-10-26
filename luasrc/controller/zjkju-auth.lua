@@ -268,13 +268,11 @@ local function fetch_consensus_digest(ext)
 	local sys_archs = get_system_archs()
 	local started = os.time()
 
-	-- 直连优先，并返回真实 tag
 	local d, u, t = fetch_one("", ext, sys_archs)
 	if d then
 		return d, u, nil, t
 	end
 
-	-- 代理共识
 	local votes, urls, tags, responses = {}, {}, {}, 0
 
 	for _, proxy in ipairs(GITHUB_PROXIES) do
