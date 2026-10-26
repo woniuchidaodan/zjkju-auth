@@ -23,8 +23,15 @@ config zjkju-auth 'main'
 	option service '%E7%94%B5%E4%BF%A1%E6%A0%A1%E5%9B%AD%E7%BD%91'
 	option check_interval '10'
 	option manual_url ''
+	option beta_channel '0'
 EOF
 chmod 600 /etc/config/zjkju-auth
+
+# 平滑升级：确保已有配置自动补全 beta_channel 字段
+if ! uci -q get zjkju-auth.main.beta_channel >/dev/null 2>&1; then
+    uci set zjkju-auth.main.beta_channel='0'
+    uci commit zjkju-auth
+fi
 
 rm -rf /var/log/zjkju-auth
 rm -f /var/log/zjkju-auth.log
