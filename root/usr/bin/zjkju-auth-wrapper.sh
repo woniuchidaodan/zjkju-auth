@@ -303,6 +303,7 @@ do_auth() {
 
 cooldown_wait() {
     local cur_user="$1" cur_pass="$2" wait_sec="$3" deadline
+    _force_flush_buffer
     deadline=$(( $(date +%s) + wait_sec ))
     set_status "cooling"
     while :; do
@@ -350,6 +351,7 @@ while true; do
         if [ "$NOCONFIG_LOGGED" != "1" ]; then
             log_msg "未配置学号/密码，等待用户在 LuCI 界面填写"
             NOCONFIG_LOGGED=1
+            _force_flush_buffer
         fi
         sleep 5; continue
     fi
@@ -374,6 +376,10 @@ while true; do
             esac
             touch "$ONLINE_FLAG"
         fi
+
+        # 【核心补丁】如果在线但对时未成功，强制将日志写入文件，避免前端永远空白
+        [ "$CLOCK_SYNCED" != "1" ] && _force_flush_buffer
+
         STATE="online"; FAIL_COUNT=0; PENDING_COUNT=0; TIMEOUT_COUNT=0
         TIMEOUT_COOLDOWN_CURRENT=$TIMEOUT_COOLDOWN_INIT
         PENDING_COOLDOWN_CURRENT=$PENDING_COOLDOWN_INIT
@@ -396,6 +402,7 @@ while true; do
         if [ "$AUTHURL_MISS_LOGGED" != "1" ]; then
             log_msg "自动获取认证地址失败"
             AUTHURL_MISS_LOGGED=1
+            _force_flush_buffer
         fi
         sleep 10; continue
     fi
