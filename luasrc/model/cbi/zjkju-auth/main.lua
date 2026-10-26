@@ -65,6 +65,7 @@ o.description = translate("日志统一写入系统日志，同时双写到本�
 
 local checkUrl    = disp.build_url("admin", "services", "zjkju-auth", "check_update")
 local doUpdateUrl = disp.build_url("admin", "services", "zjkju-auth", "do_update")
+local statusUrl   = disp.build_url("admin", "services", "zjkju-auth", "update_status")
 local csrfToken   = disp.context.authtoken or ""
 
 o = s:taboption("other", DummyValue, "_version_check", translate("版本更新"))
@@ -103,6 +104,7 @@ o.default = [=[
 var zjkjuUpdateData = null;
 var zjkjuCheckUrl = ']=] .. checkUrl .. [=['; 
 var zjkjuDoUrl = ']=] .. doUpdateUrl .. [=['; 
+var zjkjuStatusUrl = ']=] .. statusUrl .. [=['; 
 var zjkjuToken = ']=] .. csrfToken .. [=['; 
 
 function doZjkjuCheck(isSilent) {
@@ -149,8 +151,11 @@ window.zjkjuInstallUpdate = function() {
 	var btn = document.getElementById('zjkju-btn-do-update');
 	if (!btn) return;
 	btn.disabled = true;
-	var count = 30; 
-	btn.textContent = '后台下载安装中 (' + count + 's)...';
+	btn.textContent = '正在初始化...';
+	
+	// 隐藏弹窗，防止阻挡视线
+	zjkjuCloseUpdateModal();
+	
 	XHR.post(zjkjuDoUrl, { token: zjkjuToken }, function(x) {
 		if (x && x.status === 200) {
 			var res = null;
@@ -161,16 +166,36 @@ window.zjkjuInstallUpdate = function() {
 				btn.textContent = '立即更新';
 				return;
 			}
+			
+			// 开始真实进度轮询
+			var startTime = Math.floor(Date.now() / 1000);
 			var timer = setInterval(function() {
-				count--;
-				if (count <= 0) {
-					clearInterval(timer);
-					btn.textContent = '安装可能已完成，正在刷新...';
-					window.location.reload(); 
-				} else {
-					btn.textContent = '后台下载安装中 (' + count + 's)...';
-				}
+				var now = Math.floor(Date.now() / 1000);
+				var elapsed = now - startTime;
+				XHR.get(zjkjuStatusUrl + '?t=' + now, null, function(y) {
+					var text = (y && y.status === 200) ? y.responseText : '';
+					
+					if (text.indexOf('4|') === 0) {
+						clearInterval(timer);
+						btn.textContent = '安装完成，正在刷新...';
+						setTimeout(function(){ window.location.reload(); }, 1000);
+					} else if (text.indexOf('-1|') === 0) {
+						clearInterval(timer);
+						alert('更新失败: ' + text.substring(3));
+						btn.disabled = false;
+						btn.textContent = '立即更新';
+					} else if (text.indexOf('1|') === 0) {
+						btn.textContent = '下载中 (' + elapsed + 's)...';
+					} else if (text.indexOf('2|') === 0) {
+						btn.textContent = '校验中...';
+					} else if (text.indexOf('3|') === 0) {
+						btn.textContent = '安装中...';
+					} else {
+						btn.textContent = '处理中 (' + elapsed + 's)...';
+					}
+				});
 			}, 1000);
+			
 		} else {
 			alert('请求失败，请重试');
 			btn.disabled = false;
