@@ -34,13 +34,13 @@ o.rmempty = false
 o = s:taboption("basic", Value, "username", translate("用户名"),
 	translate("用户名，一般为学号，如果是新生且无学号，用户名一般为ZK开头的临时账号"))
 o.datatype = "string"
-o.rmempty = false
+o.rmempty = true
 
 o = s:taboption("basic", Value, "password", translate("密码"),
 	translate("密码，初始为身份证后六位"))
 o.password = true
 o.datatype = "string"
-o.rmempty = false
+o.rmempty = true
 
 o = s:taboption("basic", ListValue, "service", translate("服务类型"),
 	translate("默认使用“电信校园网”，一般无需修改"))
@@ -159,11 +159,11 @@ window.zjkjuInstallUpdate = function() {
 	if (!btn) return;
 	
 	btn.disabled = true;
-	btnCancel.disabled = true;
-	btnManual.disabled = true;
+	if (btnCancel) btnCancel.disabled = true;
+	if (btnManual) btnManual.disabled = true;
 	btn.textContent = '正在初始化...';
 	
-	// 去掉了关闭弹窗的代码，现在进度会直接在弹窗底部显示
+	// 不关闭弹窗，直接在当前弹窗展示进度
 	XHR.post(zjkjuDoUrl, { token: zjkjuToken }, function(x) {
 		if (x && x.status === 200) {
 			var res = null;
@@ -171,8 +171,8 @@ window.zjkjuInstallUpdate = function() {
 			if (res && !res.success) {
 				alert('更新失败: ' + (res.error || '未知错误'));
 				btn.disabled = false;
-				btnCancel.disabled = false;
-				btnManual.disabled = false;
+				if (btnCancel) btnCancel.disabled = false;
+				if (btnManual) btnManual.disabled = false;
 				btn.textContent = '立即更新';
 				return;
 			}
@@ -192,8 +192,8 @@ window.zjkjuInstallUpdate = function() {
 						clearInterval(timer);
 						alert('更新失败: ' + text.substring(3));
 						btn.disabled = false;
-						btnCancel.disabled = false;
-						btnManual.disabled = false;
+						if (btnCancel) btnCancel.disabled = false;
+						if (btnManual) btnManual.disabled = false;
 						btn.textContent = '立即更新';
 					} else if (text.indexOf('1|') === 0) {
 						btn.textContent = '下载中 (' + elapsed + 's)...';
@@ -210,8 +210,8 @@ window.zjkjuInstallUpdate = function() {
 		} else {
 			alert('请求失败，请重试');
 			btn.disabled = false;
-			btnCancel.disabled = false;
-			btnManual.disabled = false;
+			if (btnCancel) btnCancel.disabled = false;
+			if (btnManual) btnManual.disabled = false;
 			btn.textContent = '立即更新';
 		}
 	});
@@ -223,20 +223,36 @@ local sec = m:section(SimpleSection)
 sec.template = "zjkju-auth/log"
 
 function m.on_after_commit(self)
-	-- 强制写盘，确保后续的 init.d 脚本能读取到最新配置
-	self.uci:commit("zjkju-auth")
+	local u = self.uci
 	
-	local uci2 = require("luci.model.uci").cursor()
-	local enabled = uci2:get("zjkju-auth", "main", "enabled")
-	
+	-- 留空字段 → 物理删除，不留空 option
+	local user = u:get("zjkju-auth", "main", "username")
+	if not user or user == "" then u:delete("zjkju-auth", "main", "username") end
+
+	local pass = u:get("zjkju-auth", "main", "password")
+	if not pass or pass == "" then u:delete("zjkju-auth", "main", "password") end
+
+	local manual = u:get("zjkju-auth", "main", "manual_url")
+	if not manual or manual == "" then u:delete("zjkju-auth", "main", "manual_url") end
+
+	u:commit("zjkju-auth")
+
+	local enabled = u:get("zjkju-auth", "main", "enabled")
+
 	if enabled == "1" or enabled == "on" or enabled == "true" or enabled == "yes" or enabled == "enabled" then
 		luci.sys.call("/etc/init.d/zjkju-auth enable >/dev/null 2>&1")
+		-- 间隔放在 stop 和 start 之间，避开 procd 回收竞态
 		luci.sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
-		-- 异步延迟启动：立即返回页面响应，后台 1 秒后启动，彻底解决阻塞和读取不到新配置的问题
-		luci.sys.call("(sleep 1; /etc/init.d/zjkju-auth start) >/dev/null 2>&1 &")
+		luci.sys.call("(sleep 1; /etc/init.d/zjkju-auth start >/dev/null 2>&1 || logger -t zjkju-auth 'start after commit failed') >/dev/null 2>&1 &")
 	else
-		luci.sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
+		-- 强制停止：断自启 → 停实例 → 让 procd 忘记 → 强杀 → 清残留
 		luci.sys.call("/etc/init.d/zjkju-auth disable >/dev/null 2>&1")
+		luci.sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
+		luci.sys.call("ubus call service delete '{\"name\":\"zjkju-auth\"}' >/dev/null 2>&1")
+		luci.sys.call("for p in $(pidof zjkju-auth-wrapper.sh) $(pidof zjkju-auth-wrapper); do kill -9 $p; done >/dev/null 2>&1")
+		luci.sys.call("killall -9 zjkju-auth-wrapper.sh zjkju-auth-wrapper 2>/dev/null")
+		luci.sys.call("rm -f /var/log/zjkju-auth/status /var/log/zjkju-auth/last-url /var/log/zjkju-auth/online-printed 2>/dev/null")
+		luci.sys.call("rm -f /tmp/zjkju_do_update.sh /tmp/zjkju_update_status 2>/dev/null")
 	end
 end
 
