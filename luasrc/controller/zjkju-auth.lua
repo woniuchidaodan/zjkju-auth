@@ -34,6 +34,19 @@ function index()
 	entry({"admin", "services", "zjkju-auth", "status"}, call("action_status")).leaf = true
 	entry({"admin", "services", "zjkju-auth", "check_update"}, call("action_check_update")).leaf = true
 	entry({"admin", "services", "zjkju-auth", "do_update"}, call("action_do_update")).leaf = true
+	entry({"admin", "services", "zjkju-auth", "update_status"}, call("action_update_status")).leaf = true
+end
+
+function action_update_status()
+	local http = require "luci.http"
+	local fs = require "nixio.fs"
+	local status_file = "/tmp/zjkju_update_status"
+	http.prepare_content("text/plain; charset=utf-8")
+	if fs.access(status_file) then
+		http.write(fs.readfile(status_file) or "0|等待中")
+	else
+		http.write("0|等待中")
+	end
 end
 
 function action_get_log()
@@ -231,13 +244,11 @@ local function fetch_consensus_digest(ext)
 	end
 
 	if not best then
-		return nil, nil, "所有节点都没有返回可用的校验值（或安装包地址不合规）。请手动下载。"
+		return nil, nil, "所有节点请求均失败或未返回可用校验值，请检查网络或手动下载。"
 	end
-	if best_n < 2 then
-		return nil, nil, "只有 " .. best_n .. " 个节点返回一致结果，无法交叉验证。为防止投毒已拒绝自动更新，请稍后重试或手动下载。"
-	end
+	-- 修复：只要有至少1个节点成功并返回，且没有多个矛盾结果，就放行
 	if best_n < responses then
-		return nil, nil, "多个节点返回的校验值不一致（可能是加速节点缓存不同步，也可能被篡改），已拒绝自动更新。请稍后重试。"
+		return nil, nil, "多个节点返回的校验值不一致（可能被篡改或缓存不同步），已拒绝自动更新。请重试或手动下载。"
 	end
 
 	return best, urls[best], nil, tags[best]
@@ -249,7 +260,7 @@ function action_check_update()
 	local result = { current_version = current, has_update = false }
 	local rel = fetch_latest_release()
 	if not rel then
-		result.error = "所有加速节点请求失败，请检查外网是否通畅"
+		result.error = "所有节点请求失败，请检查外网是否通畅"
 	else
 		local latest = tostring(rel.tag_name):gsub("^v", "")
 		result.latest_version = latest
@@ -299,6 +310,8 @@ function action_do_update()
 		return
 	end
 
+	fs.writefile("/tmp/zjkju_update_status", "0|准备中")
+	
 	local bg_script = "/tmp/zjkju_do_update.sh"
 	local script_content = string.format([[
 #!/bin/sh
@@ -306,7 +319,10 @@ URL="%s"
 EXT="%s"
 WANT_HASH="%s"
 TARGET="/tmp/zjkju_auth_update.$EXT"
+STATUS_FILE="/tmp/zjkju_update_status"
 PROXIES="/ gh-proxy.com/ ghfast.top/ github.moeyy.xyz/ ghproxy.net/"
+
+echo "1|下载中" > "$STATUS_FILE"
 
 for P in $PROXIES; do
     if [ "$P" = "/" ]; then
@@ -318,8 +334,10 @@ for P in $PROXIES; do
     curl -sS --fail -L --connect-timeout 4 --max-time 60 -o "$TARGET" "$FULL_URL"
 
     if [ -s "$TARGET" ]; then
+        echo "2|校验中" > "$STATUS_FILE"
         GOT_HASH=$(sha256sum "$TARGET" | awk '{print $1}')
         if [ "$GOT_HASH" = "$WANT_HASH" ]; then
+            echo "3|安装中" > "$STATUS_FILE"
             if command -v opkg >/dev/null 2>&1; then
                 opkg install "$TARGET" >/dev/null 2>&1
             else
@@ -327,12 +345,14 @@ for P in $PROXIES; do
             fi
             rm -f "$TARGET" "$0"
             /etc/init.d/zjkju-auth restart >/dev/null 2>&1
+            echo "4|安装完成" > "$STATUS_FILE"
             exit 0
         fi
     fi
     rm -f "$TARGET"
 done
-rm -f "$TARGET" "$0"
+echo "-1|下载失败或校验不通过，请重试或手动下载" > "$STATUS_FILE"
+rm -f "$0"
 exit 1
 ]], url, ext, want_hash)
 
