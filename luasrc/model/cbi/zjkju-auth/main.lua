@@ -163,7 +163,6 @@ window.zjkjuInstallUpdate = function() {
 	if (btnManual) btnManual.disabled = true;
 	btn.textContent = '正在初始化...';
 	
-	// 不关闭弹窗，直接在当前弹窗展示进度
 	XHR.post(zjkjuDoUrl, { token: zjkjuToken }, function(x) {
 		if (x && x.status === 200) {
 			var res = null;
@@ -225,7 +224,7 @@ sec.template = "zjkju-auth/log"
 function m.on_after_commit(self)
 	local u = self.uci
 	
-	-- 核心修复：如果用户清空了表单，强制 UCI 底层物理删除，不留空节点（双层保险）
+	-- 清理空值，物理删除空 option
 	local user = u:get("zjkju-auth", "main", "username")
 	if not user or user == "" then u:delete("zjkju-auth", "main", "username") end
 
@@ -235,15 +234,16 @@ function m.on_after_commit(self)
 	local manual = u:get("zjkju-auth", "main", "manual_url")
 	if not manual or manual == "" then u:delete("zjkju-auth", "main", "manual_url") end
 
-	-- 移除手动 u:commit()，依靠 CBI 原生提交流程，避免打断读秒遮罩
-	
+	-- 强制提交，确保清空逻辑和表单修改绝对落盘
+	u:commit("zjkju-auth")
+
 	local enabled = u:get("zjkju-auth", "main", "enabled")
 
 	if enabled == "1" or enabled == "on" or enabled == "true" or enabled == "yes" or enabled == "enabled" then
 		luci.sys.call("/etc/init.d/zjkju-auth enable >/dev/null 2>&1")
 		luci.sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
 		
-		-- 核心修复：同步阻塞 1 秒，强制触发前端“正在等待配置被应用...”的读秒遮罩，同时避开 procd 竞态
+		-- 核心：同步 sleep 1 秒，强制前端展示“正在等待配置被应用...”读秒遮罩
 		luci.sys.call("sleep 1")
 		
 		luci.sys.call("/etc/init.d/zjkju-auth start >/dev/null 2>&1 || logger -t zjkju-auth 'start after commit failed'")
