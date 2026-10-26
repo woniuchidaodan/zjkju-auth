@@ -90,8 +90,8 @@ o.default = [=[
 		<div class="zjkju-modal-header">发现新版本 <span id="zjkju-new-ver"></span></div>
 		<div class="zjkju-modal-body" id="zjkju-update-body"></div>
 		<div class="zjkju-modal-footer">
-			<button type="button" class="cbi-button" onclick="zjkjuCloseUpdateModal()">暂不更新</button>
-			<button type="button" class="cbi-button" onclick="zjkjuGoDownload()">手动下载</button>
+			<button type="button" class="cbi-button" id="zjkju-btn-cancel-update" onclick="zjkjuCloseUpdateModal()">暂不更新</button>
+			<button type="button" class="cbi-button" id="zjkju-btn-manual-download" onclick="zjkjuGoDownload()">手动下载</button>
 			<button type="button" class="cbi-button cbi-button-action" id="zjkju-btn-do-update" onclick="zjkjuInstallUpdate()">立即更新</button>
 		</div>
 	</div>
@@ -154,12 +154,16 @@ window.zjkjuGoDownload = function() {
 
 window.zjkjuInstallUpdate = function() {
 	var btn = document.getElementById('zjkju-btn-do-update');
+	var btnCancel = document.getElementById('zjkju-btn-cancel-update');
+	var btnManual = document.getElementById('zjkju-btn-manual-download');
 	if (!btn) return;
+	
 	btn.disabled = true;
+	btnCancel.disabled = true;
+	btnManual.disabled = true;
 	btn.textContent = '正在初始化...';
 	
-	zjkjuCloseUpdateModal();
-	
+	// 去掉了关闭弹窗的代码，现在进度会直接在弹窗底部显示
 	XHR.post(zjkjuDoUrl, { token: zjkjuToken }, function(x) {
 		if (x && x.status === 200) {
 			var res = null;
@@ -167,6 +171,8 @@ window.zjkjuInstallUpdate = function() {
 			if (res && !res.success) {
 				alert('更新失败: ' + (res.error || '未知错误'));
 				btn.disabled = false;
+				btnCancel.disabled = false;
+				btnManual.disabled = false;
 				btn.textContent = '立即更新';
 				return;
 			}
@@ -186,6 +192,8 @@ window.zjkjuInstallUpdate = function() {
 						clearInterval(timer);
 						alert('更新失败: ' + text.substring(3));
 						btn.disabled = false;
+						btnCancel.disabled = false;
+						btnManual.disabled = false;
 						btn.textContent = '立即更新';
 					} else if (text.indexOf('1|') === 0) {
 						btn.textContent = '下载中 (' + elapsed + 's)...';
@@ -202,6 +210,8 @@ window.zjkjuInstallUpdate = function() {
 		} else {
 			alert('请求失败，请重试');
 			btn.disabled = false;
+			btnCancel.disabled = false;
+			btnManual.disabled = false;
 			btn.textContent = '立即更新';
 		}
 	});
@@ -213,16 +223,17 @@ local sec = m:section(SimpleSection)
 sec.template = "zjkju-auth/log"
 
 function m.on_after_commit(self)
+	-- 强制写盘，确保后续的 init.d 脚本能读取到最新配置
+	self.uci:commit("zjkju-auth")
+	
 	local uci2 = require("luci.model.uci").cursor()
 	local enabled = uci2:get("zjkju-auth", "main", "enabled")
 	
 	if enabled == "1" or enabled == "on" or enabled == "true" or enabled == "yes" or enabled == "enabled" then
 		luci.sys.call("/etc/init.d/zjkju-auth enable >/dev/null 2>&1")
 		luci.sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
-		local rc = luci.sys.call("sleep 1; /etc/init.d/zjkju-auth start >/dev/null 2>&1")
-		if rc ~= 0 then
-			luci.sys.call("logger -t zjkju-auth 'start after commit failed, rc=" .. rc .. "'")
-		end
+		-- 异步延迟启动：立即返回页面响应，后台 1 秒后启动，彻底解决阻塞和读取不到新配置的问题
+		luci.sys.call("(sleep 1; /etc/init.d/zjkju-auth start) >/dev/null 2>&1 &")
 	else
 		luci.sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
 		luci.sys.call("/etc/init.d/zjkju-auth disable >/dev/null 2>&1")
