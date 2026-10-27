@@ -102,11 +102,23 @@ function action_status()
 	local fs = require "nixio.fs"
 	local uci = require("luci.model.uci").cursor()
 	local enabled = uci:get("zjkju-auth", "main", "enabled") or "0"
-	-- 注意：Linux 的 comm 只有 15 字符（zjkju-auth-wrap），
-	-- pidof 用完整文件名匹配不上，必须用 ps 找命令行。
+	-- 进程存活判断：优先问 procd（最权威），再退回 ps / pidof
 	local running = false
-	local pline = sys.exec("ps w 2>/dev/null | grep '[z]jkju-auth-wrapper' | head -n1")
-	if pline and pline:gsub("%s+", "") ~= "" then running = true end
+	-- ① 首选 procd 的权威判断（最可靠，不受进程名截断影响）
+	local svc = sys.exec("ubus call service list '{\"name\":\"zjkju-auth\"}' 2>/dev/null")
+	if svc and svc:find('"running": true', 1, true) then
+		running = true
+	end
+	-- ② 退回 ps（兼容 comm 只有 15 字符的情况）
+	if not running then
+		local pline = sys.exec("ps 2>/dev/null | grep '[z]jkju-auth-wrapper' | head -n1")
+		if pline and pline:gsub("%s+", "") ~= "" then running = true end
+	end
+	-- ③ 再退回 pidof（两个名字都试）
+	if not running then
+		local pid = sys.exec("pidof zjkju-auth-wrapper.sh 2>/dev/null; pidof zjkju-auth-wrapper 2>/dev/null")
+		if pid and pid:gsub("%s+", "") ~= "" then running = true end
+	end
 	local status = ""
 	if fs.access(STATUS_FILE) then
 		status = (fs.readfile(STATUS_FILE) or ""):gsub("%s+", "")
