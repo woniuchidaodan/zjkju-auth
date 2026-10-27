@@ -4,7 +4,7 @@ local sys       = require "luci.sys"
 local disp      = require "luci.dispatcher"
 
 local m, s, o
-local PKG_VERSION = "1.0.4-r8"
+local PKG_VERSION = "1.0.4-r9"
 do
 	local v = sys.exec("opkg status luci-app-zjkju-auth 2>/dev/null | grep '^Version:' | awk '{print $2}'")
 	if not v or v == "" then
@@ -14,7 +14,7 @@ do
 	local clean_v = v:match("([0-9%.]+%-r[0-9]+%a*)")
 		or v:match("([0-9%.]+%-[0-9]+)")
 		or v:match("([0-9%.]+)") or ""
-	-- opkg 的 Version 形如 "1.0.4-8"，统一规范成 "1.0.4-r8" 才能和 tag 比较
+	-- opkg 的 Version 形如 "1.0.4-9"，统一规范成 "1.0.4-r9" 才能和 tag 比较
 	clean_v = clean_v:gsub("%-(%d+)$", "-r%1")
 	if clean_v ~= "" then PKG_VERSION = clean_v end
 end
@@ -249,12 +249,17 @@ local sec = m:section(SimpleSection)
 sec.template = "zjkju-auth/log"
 
 function m.on_after_commit(self)
-	-- 显式落盘一次（Map.apply 已提交过，这里是双保险，通常不产生实际写入）
+	-- 【关键】把内存中的改动立即落盘。
+	-- Map.apply 的 commit 可能在本函数之后才执行，而 /etc/init.d 的 start_service
+	-- 读的是磁盘上的配置文件；不先落盘，start 会读到旧的 enabled，
+	-- 表现出来就是"要点两次保存才生效"。
+	self.uci:commit("zjkju-auth")
 	luci.sys.call("uci commit zjkju-auth")
 
-	-- 直接问 uci（和 init.d / status 接口完全同源），避免 self.uci 内存状态不一致
-	local enabled = luci.sys.exec("uci -q get zjkju-auth.main.enabled 2>/dev/null"):gsub("%s+", "")
-	luci.sys.call("logger -t zjkju-auth '保存后判断: enabled=[" .. enabled .. "]'")
+	-- 决策用内存值（一定包含本次修改）；磁盘值只用于日志对照
+	local enabled      = self.uci:get("zjkju-auth", "main", "enabled")
+	local enabled_disk = luci.sys.exec("uci -q get zjkju-auth.main.enabled 2>/dev/null"):gsub("%s+", "")
+	luci.sys.call("logger -t zjkju-auth '保存后判断: mem=[" .. tostring(enabled) .. "] disk=[" .. enabled_disk .. "]'")
 
 	if enabled == "1" or enabled == "on" or enabled == "true" or enabled == "yes" or enabled == "enabled" then
 		luci.sys.call("/etc/init.d/zjkju-auth enable >/dev/null 2>&1")
