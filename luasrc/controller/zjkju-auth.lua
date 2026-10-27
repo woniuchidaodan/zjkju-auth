@@ -382,7 +382,7 @@ function action_do_update()
 	fs.writefile("/tmp/zjkju_update_status", "0|准备中|0")
 	
 	local bg_script = "/tmp/zjkju_do_update.sh"
-	local script_content = string.format([[
+	local fmt_ok, script_content = pcall(string.format, [[
 #!/bin/sh
 URL="%s"
 EXT="%s"
@@ -393,7 +393,7 @@ STATUS_FILE="/tmp/zjkju_update_status"
 PROXIES="/ gh-proxy.com/ ghfast.top/"
 
 # 原子写入：先写临时文件再 rename，避免前端读到只写了一半的内容
-# 注意：这段会被 Lua 的 string.format 处理，除 4 个 %s 占位符外不能再出现 %，
+# 注意：这段会被 Lua 的 string.format 处理，注释里不能出现百分号，
 #       所以这里用 echo -n 而不是 printf
 set_status() {
     echo -n "$1" > "$STATUS_FILE.tmp" 2>/dev/null && mv -f "$STATUS_FILE.tmp" "$STATUS_FILE" 2>/dev/null
@@ -436,8 +436,8 @@ for P in $PROXIES; do
     CURL_RC=$?
 
     if [ "$CURL_RC" = "0" ] && [ -s "$TARGET" ]; then
-        # 先亮出 100% 并停留 1 秒（busybox 的 sleep 不支持小数），
-        # 保证 500ms 轮询的前端至少能读到一次百分比
+        # 先亮出满进度并停留 1 秒（busybox 的 sleep 不支持小数），
+        # 保证 500ms 轮询的前端至少能读到一次进度
         set_status "1|下载中|100"
         sleep 1
         set_status "2|校验中|100"
@@ -461,6 +461,10 @@ set_status "-1|下载失败或校验不通过，请重试或手动下载|0"
 rm -f "$0"
 exit 1
 ]], url, ext, want_hash, total_size)
+	if not fmt_ok then
+		http.write_json({ success = false, error = "生成更新脚本出错：" .. tostring(script_content) })
+		return
+	end
 
 	fs.writefile(bg_script, script_content)
 	sys.call("chmod +x " .. bg_script)
