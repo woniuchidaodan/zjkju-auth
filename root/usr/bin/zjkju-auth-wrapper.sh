@@ -360,7 +360,7 @@ while true; do
     config_get check_interval main check_interval 10
     check_interval=$(normalize_interval "$check_interval")
 
-    if [ "$enabled" != "1" ]; then set_status "disabled"; sleep 10; continue; fi
+    if [ "$enabled" != "1" ]; then set_status "disabled"; sleep_i 10; continue; fi
 
     if [ -z "$username" ] || [ -z "$password" ]; then
         set_status "noconfig"
@@ -445,7 +445,7 @@ while true; do
             cooldown_wait "$username" "$password" "$PENDING_COOLDOWN_CURRENT"
             PENDING_COOLDOWN_CURRENT=$((PENDING_COOLDOWN_CURRENT + 300))
             [ "$PENDING_COOLDOWN_CURRENT" -gt "$MAX_COOLDOWN" ] && PENDING_COOLDOWN_CURRENT=$MAX_COOLDOWN
-            PENDING_COUNT=0; sleep "$check_interval"; continue
+            PENDING_COUNT=0; sleep_i "$check_interval"; continue
         fi
         RETRY_DELAY=$((15 * PENDING_COUNT)); [ "$RETRY_DELAY" -gt 120 ] && RETRY_DELAY=120
     else
@@ -461,14 +461,14 @@ while true; do
                 cooldown_wait "$username" "$password" "$TIMEOUT_COOLDOWN_CURRENT"
                 TIMEOUT_COOLDOWN_CURRENT=$((TIMEOUT_COOLDOWN_CURRENT + 300))
                 [ "$TIMEOUT_COOLDOWN_CURRENT" -gt "$MAX_COOLDOWN" ] && TIMEOUT_COOLDOWN_CURRENT=$MAX_COOLDOWN
-                TIMEOUT_COUNT=0; sleep "$check_interval"; continue
+                TIMEOUT_COUNT=0; sleep_i "$check_interval"; continue
             fi
         else
             FAIL_COUNT=$((FAIL_COUNT + 1))
             if [ "$FAIL_COUNT" -ge "$MAX_FAIL" ]; then
                 log_msg "连续 ${FAIL_COUNT} 次认证未成功，冷却 ${FAIL_COOLDOWN_SEC} 秒，请检查学号/密码/服务类型"
                 cooldown_wait "$username" "$password" "$FAIL_COOLDOWN_SEC"
-                FAIL_COUNT=0; sleep "$check_interval"; continue
+                FAIL_COUNT=0; sleep_i "$check_interval"; continue
             fi
         fi
         RETRY_DELAY=$((check_interval * (FAIL_COUNT + TIMEOUT_COUNT)))
