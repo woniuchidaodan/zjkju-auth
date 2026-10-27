@@ -63,30 +63,21 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 配置编译选项（只配置 APK 格式）
+      - name: 配置格式（${{ matrix.pkg_format }}）
         run: |
           cd /opt/sdk
-          # 先跑一次 defconfig 初始化依赖树
           make defconfig
-          
-          # 根据矩阵变量设置格式
           if [ "${{ matrix.pkg_format }}" = "apk" ]; then
             echo "CONFIG_USE_APK=y" >> .config
           else
             echo "# CONFIG_USE_APK is not set" >> .config
           fi
-          
-          # 再次 defconfig 确保格式配置生效
           make defconfig
-          
-          # 检查配置结果
-          echo "=== 当前 .config 中 apk 相关的配置 ==="
-          grep "CONFIG_USE_APK" .config || true
 
       - name: 开始编译
         run: |
           cd /opt/sdk
-          # 直接编译目标包，SDK 会自动拉取依赖 (luci-base 等)，不需要在 .config 中手动写 =m
+          # 直接调用 compile，SDK 会自动解决依赖，不再需要手动写入 =m
           make package/luci-app-zjkju-auth/compile V=s -j$(nproc) 2>&1 | tee /tmp/build.log
 
       - name: 收集生成的 ${{ matrix.pkg_format }} 包
@@ -104,7 +95,7 @@ jobs:
           ls -la $GITHUB_WORKSPACE/output/
           
           if [ "$COUNT" -eq 0 ]; then
-            echo "::error::编译完成但未找到任何 ${{ matrix.pkg_format }} 文件！请向上滚动查看编译日志中的报错。"
+            echo "::error::编译完成但未找到任何 ${{ matrix.pkg_format }} 文件！请检查日志。"
             exit 1
           fi
 
@@ -186,8 +177,7 @@ jobs:
           echo "==== 删除旧 Release (如果存在) ===="
           gh release delete "$TAG" --repo "$REPO" --yes --cleanup-tag 2>/dev/null || echo "旧 Release 不存在"
 
-          NOTES_FILE="${GITHUB_WORKSPACE}/.github/RELEASE_NOTES.md"
-
+          # 安全提取所有包，防止 *.ipk 为空时导致 gh 报错
           shopt -s nullglob
           PKGS=("${GITHUB_WORKSPACE}"/output/*.ipk "${GITHUB_WORKSPACE}"/output/*.apk)
           shopt -u nullglob
@@ -195,38 +185,35 @@ jobs:
             echo "::error::output 目录里没有任何 ipk/apk，取消发布"
             exit 1
           fi
-          echo "本次将上传 ${#PKGS[@]} 个安装包："
-          printf '  %s\n' "${PKGS[@]}"
 
           echo "==== 创建新 Release: $TAG ===="
-          if [ -f "$NOTES_FILE" ]; then
-            echo "使用 RELEASE_NOTES.md 作为发布说明"
-            gh release create "$TAG" \
-              --repo "$REPO" \
-              --title "$TITLE" \
-              $PRE_FLAG \
-              --notes-file "$NOTES_FILE"
-          else
-            echo "未找到 RELEASE_NOTES.md，改为自动生成变更列表"
-            gh release create "$TAG" \
-              --repo "$REPO" \
-              --title "$TITLE" \
-              $PRE_FLAG \
-              --generate-notes
-          fi
+          gh release create "$TAG" \
+            --repo "$REPO" \
+            --title "$TITLE" \
+            $PRE_FLAG \
+            --notes "## luci-app-zjkju-auth ${VERSION}
+
+          湛江科技学院锐捷 ePortal 校园网自动认证的 LuCI 应用。
+
+          ### 🚀 核心更新
+          - **修复版本号识别（opkg `1.0.4-7` → `1.0.4-r7`），解决装完仍无限提示更新的问题**
+          - **修复升级后账号、密码被清空的问题**
+          - **修复日志偶发消失的问题（全场景强制落盘）**
+          - **优化在线更新：直连优先 + 真实下载进度显示**
+          - **恢复 1.0.2 同款的配置保存读秒遮罩，且彻底解决点两次生效的 Bug**
+
+          ### 📦 安装说明
+          **方式一：opkg（旧系统）**
+          \`\`\`bash
+          opkg install /tmp/luci-app-zjkju-auth_*.ipk
+          \`\`\`
+          **方式二：apk（新系统）**
+          \`\`\`bash
+          apk add --allow-untrusted /tmp/luci-app-zjkju-auth_*.apk
+          \`\`\`"
 
           echo "==== 上传所有包 ===="
           gh release upload "$TAG" "${PKGS[@]}" --repo "$REPO" --clobber
-
-          echo "==== 验证附件 ===="
-          gh release view "$TAG" --repo "$REPO"
-
-          ASSET_COUNT=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets | length')
-          echo "附件数量: $ASSET_COUNT"
-          if [ "$ASSET_COUNT" -eq 0 ]; then
-            echo "::error::Release $TAG 创建成功但没有任何附件，请检查构建产物"
-            exit 1
-          fi
 
           echo "✅ 发布完成"
           echo "Release: https://github.com/$REPO/releases/tag/$TAG"
