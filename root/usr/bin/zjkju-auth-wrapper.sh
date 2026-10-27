@@ -122,6 +122,17 @@ trap '_force_flush_buffer; exit 0' TERM INT
 
 set_status() { echo "$1" > "$STATUS_FILE"; }
 
+# 可被 TERM 打断的分段睡眠：保证收到停止信号后 1 秒内退出，
+# 而不是等当前 sleep（最长 120 秒）跑完才执行 trap。
+sleep_i() {
+    local _n="$1"
+    case "$_n" in ''|*[!0-9]*) _n=1 ;; esac
+    while [ "$_n" -gt 0 ]; do
+        sleep 1
+        _n=$((_n - 1))
+    done
+}
+
 do_ntp_sync() {
     local prev now delta i rc stepped ntpd_done
 
@@ -138,7 +149,7 @@ do_ntp_sync() {
 
         prev=$(date +%s 2>/dev/null)
         i=0
-        while [ "$i" -lt 8 ]; do
+        while [ "$i" -lt 4 ]; do
             if ! kill -0 "$NTP_PID" 2>/dev/null; then ntpd_done=1; break; fi
             sleep 1
             now=$(date +%s 2>/dev/null)
@@ -181,10 +192,7 @@ do_ntp_sync_with_flush() {
     return $rc
 }
 
-if [ "$CLOCK_SYNCED" != "1" ] && ping -c 1 -W 2 223.5.5.5 >/dev/null 2>&1; then
-    do_ntp_sync_with_flush
-fi
-
+# 启动不再阻塞对时：主循环里的 try_ntp 会完成同步并按 offset 回填日志时间
 log_msg "wrapper started"
 
 normalize_interval() {
@@ -307,7 +315,7 @@ cooldown_wait() {
     deadline=$(( $(date +%s) + wait_sec ))
     set_status "cooling"
     while :; do
-        sleep "$COOLDOWN_CHECK_INTERVAL"
+        sleep_i "$COOLDOWN_CHECK_INTERVAL"
         if is_online; then set_status "online"; return 0; fi
         config_load zjkju-auth
         local new_user new_pass
@@ -353,7 +361,7 @@ while true; do
             NOCONFIG_LOGGED=1
             _force_flush_buffer
         fi
-        sleep 5; continue
+        sleep_i 5; continue
     fi
     NOCONFIG_LOGGED=0
 
@@ -382,17 +390,17 @@ while true; do
         STATE="online"; FAIL_COUNT=0; PENDING_COUNT=0; TIMEOUT_COUNT=0
         TIMEOUT_COOLDOWN_CURRENT=$TIMEOUT_COOLDOWN_INIT
         PENDING_COOLDOWN_CURRENT=$PENDING_COOLDOWN_INIT
-        sleep "$check_interval"; continue
+        sleep_i "$check_interval"; continue
     fi
 
     set_status "offline"
     rm -f "$ONLINE_FLAG"
 
     if [ "$STATE" = "online" ]; then
-        sleep 10
+        sleep_i 10
         if is_online; then
             set_status "online"; touch "$ONLINE_FLAG"; STATE="online"
-            sleep "$check_interval"; continue
+            sleep_i "$check_interval"; continue
         fi
     fi
 
@@ -403,7 +411,7 @@ while true; do
             AUTHURL_MISS_LOGGED=1
             _force_flush_buffer
         fi
-        sleep 10; continue
+        sleep_i 10; continue
     fi
     AUTHURL_MISS_LOGGED=0
 
@@ -459,5 +467,5 @@ while true; do
         [ "$RETRY_DELAY" -lt 10 ] && RETRY_DELAY=10
         [ "$RETRY_DELAY" -gt 120 ] && RETRY_DELAY=120
     fi
-    sleep "$RETRY_DELAY"
+    sleep_i "$RETRY_DELAY"
 done
