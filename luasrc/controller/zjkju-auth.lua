@@ -393,8 +393,10 @@ STATUS_FILE="/tmp/zjkju_update_status"
 PROXIES="/ gh-proxy.com/ ghfast.top/"
 
 # 原子写入：先写临时文件再 rename，避免前端读到只写了一半的内容
+# 注意：这段会被 Lua 的 string.format 处理，除 4 个 %s 占位符外不能再出现 %，
+#       所以这里用 echo -n 而不是 printf
 set_status() {
-    printf '%s' "$1" > "$STATUS_FILE.tmp" 2>/dev/null && mv -f "$STATUS_FILE.tmp" "$STATUS_FILE" 2>/dev/null
+    echo -n "$1" > "$STATUS_FILE.tmp" 2>/dev/null && mv -f "$STATUS_FILE.tmp" "$STATUS_FILE" 2>/dev/null
 }
 
 set_status "1|下载中|0"
@@ -434,9 +436,10 @@ for P in $PROXIES; do
     CURL_RC=$?
 
     if [ "$CURL_RC" = "0" ] && [ -s "$TARGET" ]; then
-        # 先亮出 100% 并停留片刻，让 500ms 轮询的前端至少能读到一次百分比
+        # 先亮出 100% 并停留 1 秒（busybox 的 sleep 不支持小数），
+        # 保证 500ms 轮询的前端至少能读到一次百分比
         set_status "1|下载中|100"
-        sleep 0.5
+        sleep 1
         set_status "2|校验中|100"
         GOT_HASH=$(sha256sum "$TARGET" | awk '{print $1}')
         if [ "$GOT_HASH" = "$WANT_HASH" ]; then
