@@ -4,14 +4,18 @@ local sys       = require "luci.sys"
 local disp      = require "luci.dispatcher"
 
 local m, s, o
-local PKG_VERSION = "1.0.4-r7"
+local PKG_VERSION = "1.0.4-r8"
 do
 	local v = sys.exec("opkg status luci-app-zjkju-auth 2>/dev/null | grep '^Version:' | awk '{print $2}'")
 	if not v or v == "" then
 		v = sys.exec("apk info -v luci-app-zjkju-auth 2>/dev/null | head -n1 | cut -d'-' -f2-")
 	end
 	v = (v or ""):gsub("%s+", "")
-	local clean_v = v:match("([0-9%.]+%-r[0-9]+%a*)") or v:match("([0-9%.]+)") or ""
+	local clean_v = v:match("([0-9%.]+%-r[0-9]+%a*)")
+		or v:match("([0-9%.]+%-[0-9]+)")
+		or v:match("([0-9%.]+)") or ""
+	-- opkg 的 Version 形如 "1.0.4-8"，统一规范成 "1.0.4-r8" 才能和 tag 比较
+	clean_v = clean_v:gsub("%-(%d+)$", "-r%1")
 	if clean_v ~= "" then PKG_VERSION = clean_v end
 end
 
@@ -233,6 +237,9 @@ local sec = m:section(SimpleSection)
 sec.template = "zjkju-auth/log"
 
 function m.on_after_commit(self)
+	-- 显式落盘一次（Map.apply 已提交过，这里是双保险，通常不产生实际写入）
+	luci.sys.call("uci commit zjkju-auth")
+
 	local u = self.uci
 	local enabled = u:get("zjkju-auth", "main", "enabled")
 
