@@ -183,25 +183,36 @@ window.zjkjuInstallUpdate = function() {
 				XHR.get(zjkjuStatusUrl + '?t=' + now, null, function(y) {
 					var text = (y && y.status === 200) ? y.responseText : '';
 					
-					if (text.indexOf('4|') === 0) {
+					var parts = text.split('|');
+					var state = parts[0];
+					var msg = parts[1] || '';
+					
+					var pct = (parts[2] || '').replace(/[^0-9]/g, '');
+					var n = parseInt(pct, 10);
+					if (isNaN(n)) n = 0;
+					if (n > 100) n = 100;
+					
+					if (state === '4') {
 						clearInterval(timer);
 						btn.textContent = '安装完成，正在刷新...';
 						setTimeout(function(){ window.location.reload(); }, 1000);
-					} else if (text.indexOf('-1|') === 0) {
+					} else if (state === '-1') {
 						clearInterval(timer);
-						alert('更新失败: ' + text.substring(3));
+						alert('更新失败: ' + msg);
 						btn.disabled = false;
 						if (btnCancel) btnCancel.disabled = false;
 						if (btnManual) btnManual.disabled = false;
 						btn.textContent = '立即更新';
-					} else if (text.indexOf('1|') === 0) {
-						btn.textContent = '下载中 (' + elapsed + 's)...';
-					} else if (text.indexOf('2|') === 0) {
+					} else if (state === '1') {
+						btn.textContent = n > 0 
+							? '下载中 ' + n + '% (' + elapsed + 's)' 
+							: '下载中 (' + elapsed + 's)...';
+					} else if (state === '2') {
 						btn.textContent = '校验中...';
-					} else if (text.indexOf('3|') === 0) {
+					} else if (state === '3') {
 						btn.textContent = '安装中...';
 					} else {
-						btn.textContent = '处理中 (' + elapsed + 's)...';
+						btn.textContent = (msg || '处理中') + ' (' + elapsed + 's)...';
 					}
 				});
 			}, 1000);
@@ -223,30 +234,23 @@ sec.template = "zjkju-auth/log"
 
 function m.on_after_commit(self)
 	local u = self.uci
-	
-	-- 清理空值，物理删除空 option
-	local user = u:get("zjkju-auth", "main", "username")
-	if not user or user == "" then u:delete("zjkju-auth", "main", "username") end
-
-	local pass = u:get("zjkju-auth", "main", "password")
-	if not pass or pass == "" then u:delete("zjkju-auth", "main", "password") end
-
-	local manual = u:get("zjkju-auth", "main", "manual_url")
-	if not manual or manual == "" then u:delete("zjkju-auth", "main", "manual_url") end
-
-	-- 强制提交，确保清空逻辑和表单修改绝对落盘
-	u:commit("zjkju-auth")
-
 	local enabled = u:get("zjkju-auth", "main", "enabled")
 
 	if enabled == "1" or enabled == "on" or enabled == "true" or enabled == "yes" or enabled == "enabled" then
 		luci.sys.call("/etc/init.d/zjkju-auth enable >/dev/null 2>&1")
 		luci.sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
-		
-		-- 核心：同步 sleep 1 秒，强制前端展示“正在等待配置被应用...”读秒遮罩
+
+		-- 1. 轮询等待旧进程彻底退出（防止点两次，极速完成）
+		luci.sys.call("i=0; while pidof zjkju-auth-wrapper.sh >/dev/null 2>&1 && [ $i -lt 20 ]; do i=$((i+1)); sleep 0.1 2>/dev/null; done")
+
+		-- 2. 强制阻塞剩余时间，拉长后端响应，触发前端 1.0.2 同款的“全局读秒”
 		luci.sys.call("sleep 1")
-		
-		luci.sys.call("/etc/init.d/zjkju-auth start >/dev/null 2>&1 || logger -t zjkju-auth 'start after commit failed'")
+
+		-- 3. 启动服务并记录失败日志
+		local rc = luci.sys.call("/etc/init.d/zjkju-auth start >/dev/null 2>&1")
+		if rc ~= 0 then
+			luci.sys.call("logger -t zjkju-auth 'start after commit failed, rc=" .. rc .. "'")
+		end
 	else
 		-- 强制停止：断自启 → 停实例 → 让 procd 忘记 → 强杀 → 清残留
 		luci.sys.call("/etc/init.d/zjkju-auth disable >/dev/null 2>&1")
@@ -257,7 +261,7 @@ function m.on_after_commit(self)
 		luci.sys.call("rm -f /var/log/zjkju-auth/status /var/log/zjkju-auth/last-url /var/log/zjkju-auth/online-printed 2>/dev/null")
 		luci.sys.call("rm -f /tmp/zjkju_do_update.sh /tmp/zjkju_update_status 2>/dev/null")
 		
-		-- 同步睡眠，展示读秒
+		-- 禁用分支同样强制阻塞 1 秒，让用户看到读秒结束再刷新
 		luci.sys.call("sleep 1")
 	end
 end
