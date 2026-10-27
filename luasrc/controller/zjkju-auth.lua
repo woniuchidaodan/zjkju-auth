@@ -25,9 +25,8 @@ function index()
 	local fs = require "nixio.fs"
 	if not fs.access("/etc/config/zjkju-auth") then return end
 
-	-- 两个独立菜单页：认证设置 / 其他设置
+	-- 单页面 + 两个标签页（认证设置 / 其他设置）
 	entry({"admin", "services", "zjkju-auth"}, cbi("zjkju-auth/main"), _("ZJKJU 校园网认证"), 60).dependent = true
-	entry({"admin", "services", "zjkju-auth", "other"}, cbi("zjkju-auth/other"), _("其他设置"), 61).dependent = true
 	entry({"admin", "services", "zjkju-auth", "log"}, call("action_get_log")).leaf = true
 	entry({"admin", "services", "zjkju-auth", "restart"}, call("action_restart")).leaf = true
 	entry({"admin", "services", "zjkju-auth", "clearlog"}, call("action_clear_log")).leaf = true
