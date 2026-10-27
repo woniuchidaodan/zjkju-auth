@@ -107,6 +107,17 @@ o.default = [=[
 .zjkju-modal-header { padding:14px 18px; border-bottom:1px solid #eee; font-weight:bold; }
 .zjkju-modal-body { padding:16px 18px; max-height:45vh; overflow:auto; font-size:13px; color:#444; line-height:1.6; white-space:pre-wrap; word-break:break-word; }
 .zjkju-modal-footer { padding:12px 18px; border-top:1px solid #eee; text-align:right; }
+/* 按钮：强制按内容撑开，避免"下载中 100%"被主题样式截断 */
+.zjkju-modal-footer .cbi-button {
+    width: auto !important;
+    min-width: 7em !important;
+    white-space: nowrap !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    padding: 0 14px !important;
+    margin-left: 6px;
+}
+.zjkju-modal-footer #zjkju-btn-do-update { min-width: 10em !important; }
 </style>
 
 <script>
@@ -196,7 +207,7 @@ window.zjkjuInstallUpdate = function() {
 					
 					if (state === '4') {
 						clearInterval(timer);
-						btn.textContent = '安装完成，正在刷新...';
+						btn.textContent = '完成，刷新中...';
 						setTimeout(function(){ window.location.reload(); }, 1000);
 					} else if (state === '-1') {
 						clearInterval(timer);
@@ -210,9 +221,9 @@ window.zjkjuInstallUpdate = function() {
 							? '下载中 ' + n + '%' 
 							: '下载中...';
 					} else if (state === '2') {
-						btn.textContent = '校验中...';
+						btn.textContent = '校验中';
 					} else if (state === '3') {
-						btn.textContent = '安装中...';
+						btn.textContent = '安装中';
 					} else {
 						btn.textContent = (msg || '处理中') + '...';
 					}
@@ -241,8 +252,9 @@ function m.on_after_commit(self)
 	-- 显式落盘一次（Map.apply 已提交过，这里是双保险，通常不产生实际写入）
 	luci.sys.call("uci commit zjkju-auth")
 
-	local u = self.uci
-	local enabled = u:get("zjkju-auth", "main", "enabled")
+	-- 直接问 uci（和 init.d / status 接口完全同源），避免 self.uci 内存状态不一致
+	local enabled = luci.sys.exec("uci -q get zjkju-auth.main.enabled 2>/dev/null"):gsub("%s+", "")
+	luci.sys.call("logger -t zjkju-auth '保存后判断: enabled=[" .. enabled .. "]'")
 
 	if enabled == "1" or enabled == "on" or enabled == "true" or enabled == "yes" or enabled == "enabled" then
 		luci.sys.call("/etc/init.d/zjkju-auth enable >/dev/null 2>&1")
@@ -256,9 +268,8 @@ function m.on_after_commit(self)
 
 		-- ③ 启动并记录失败
 		local rc = luci.sys.call("/etc/init.d/zjkju-auth start >/dev/null 2>&1")
-		if rc ~= 0 then
-			luci.sys.call("logger -t zjkju-auth 'start after commit failed, rc=" .. rc .. "'")
-		end
+		local cnt = luci.sys.exec("ps 2>/dev/null | grep -c '[z]jkju-auth-wrapper'")
+		luci.sys.call("logger -t zjkju-auth '启动完成 rc=" .. rc .. " 进程数=" .. (cnt:gsub("%s+", "")) .. "'")
 	else
 		-- 强制停止：断自启 → 停实例 → 让 procd 忘记 → 强杀 → 清残留
 		luci.sys.call("/etc/init.d/zjkju-auth disable >/dev/null 2>&1")
