@@ -184,8 +184,18 @@ jobs:
           echo "==== 删除旧 Release (如果存在) ===="
           gh release delete "$TAG" --repo "$REPO" --yes --cleanup-tag 2>/dev/null || echo "旧 Release 不存在"
 
-          echo "==== 创建新 Release: $TAG ===="
           NOTES_FILE="${GITHUB_WORKSPACE}/.github/RELEASE_NOTES.md"
+
+          # ---- 先确认真的有安装包，避免创建出"空壳 release" ----
+          shopt -s nullglob
+          PKGS=("${GITHUB_WORKSPACE}"/output/*.ipk "${GITHUB_WORKSPACE}"/output/*.apk)
+          shopt -u nullglob
+          if [ ${#PKGS[@]} -eq 0 ]; then
+            echo "::error::output 目录里没有任何 ipk/apk，取消发布"
+            exit 1
+          fi
+          echo "本次将上传 ${#PKGS[@]} 个安装包："
+          printf '  %s\n' "${PKGS[@]}"
 
           echo "==== 创建新 Release: $TAG ===="
           if [ -f "$NOTES_FILE" ]; then
@@ -205,14 +215,19 @@ jobs:
           fi
 
           echo "==== 上传所有包 ===="
-          gh release upload "$TAG" \
-            ${{ github.workspace }}/output/*.ipk \
-            ${{ github.workspace }}/output/*.apk \
-            --repo "$REPO" \
-            --clobber 2>&1 || echo "部分文件上传失败，检查是否有匹配文件"
+          # 注意：不要用 *.ipk *.apk 这种裸 glob —— 没匹配到时 shell 会把字面量传进去，
+          # gh 会报 "no matches found" 导致整个上传失败，而 release 已经建好了却没有任何附件。
+          gh release upload "$TAG" "${PKGS[@]}" --repo "$REPO" --clobber
 
-          echo "==== 验证 ===="
+          echo "==== 验证附件 ===="
           gh release view "$TAG" --repo "$REPO"
+
+          ASSET_COUNT=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets | length')
+          echo "附件数量: $ASSET_COUNT"
+          if [ "$ASSET_COUNT" -eq 0 ]; then
+            echo "::error::Release $TAG 创建成功但没有任何附件，请检查构建产物"
+            exit 1
+          fi
 
           echo "✅ 发布完成"
           echo "Release: https://github.com/$REPO/releases/tag/$TAG"
