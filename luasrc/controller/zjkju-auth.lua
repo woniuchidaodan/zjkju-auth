@@ -103,7 +103,9 @@ function action_status()
 	local fs = require "nixio.fs"
 	local uci = require("luci.model.uci").cursor()
 	local enabled = uci:get("zjkju-auth", "main", "enabled") or "0"
-	-- 进程存活判断：优先问 procd（最权威），再退回 ps / pidof
+	-- 【硬性约束】进程存活判断必须 ubus 优先。
+	-- Linux 的 comm 只有 15 字符（zjkju-auth-wrap），pidof 用完整名匹配不上；
+	-- 不要改回 pidof 作为首选，否则徽章会误报「未运行」。
 	local running = false
 	-- ① 首选 procd 的权威判断（最可靠，不受进程名截断影响）
 	local svc = sys.exec("ubus call service list '{\"name\":\"zjkju-auth\"}' 2>/dev/null")
@@ -167,11 +169,30 @@ local function beta_enabled()
 	return uci.cursor():get("zjkju-auth", "main", "beta_channel") == "1"
 end
 
-local function pick_newest(parsed)
+local function get_pkg_ext()
+	local sys = require "luci.sys"
+	if sys.call("command -v opkg >/dev/null 2>&1") == 0 then return "ipk" end
+	if sys.call("command -v apk >/dev/null 2>&1") == 0 then return "apk" end
+	return nil
+end
+
+-- release 是否真的带有本机需要的安装包（有些 release 只有 tag、没上传产物）
+local function has_asset_of_type(rel, ext)
+	if type(rel.assets) ~= "table" then return false end
+	for _, a in ipairs(rel.assets) do
+		if type(a) == "table" and a.name and a.name:match("%." .. ext .. "$") then
+			return true
+		end
+	end
+	return false
+end
+
+local function pick_newest(parsed, ext)
 	local allow_beta = beta_enabled()
 	if type(parsed) ~= "table" then return nil end
 	if parsed.tag_name then
 		if not allow_beta and parsed.prerelease then return nil end
+		if ext and not has_asset_of_type(parsed, ext) then return nil end
 		return parsed
 	end
 
@@ -179,12 +200,15 @@ local function pick_newest(parsed)
 	for _, r in ipairs(parsed) do
 		if type(r) == "table" and r.tag_name and not r.draft then
 			if allow_beta or not r.prerelease then
-				if not best then
-					best = r
-				else
-					local c = compare_version(r.tag_name, best.tag_name)
-					if c > 0 or (c == 0 and best.prerelease and not r.prerelease) then
+				-- 跳过没有对应安装包的 release，避免选中"空壳版本"后更新失败
+				if not ext or has_asset_of_type(r, ext) then
+					if not best then
 						best = r
+					else
+						local c = compare_version(r.tag_name, best.tag_name)
+						if c > 0 or (c == 0 and best.prerelease and not r.prerelease) then
+							best = r
+						end
 					end
 				end
 			end
@@ -193,7 +217,7 @@ local function pick_newest(parsed)
 	return best
 end
 
-local function fetch_latest_release()
+local function fetch_latest_release(ext)
 	local sys = require "luci.sys"
 	local jsonc = require "luci.jsonc"
 	local ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -208,7 +232,7 @@ local function fetch_latest_release()
 			local ok, parsed = pcall(jsonc.parse, res)
 			if ok then
 				answered = true
-				local rel = pick_newest(parsed)
+				local rel = pick_newest(parsed, ext)
 				if rel then return rel, answered end
 			end
 		end
@@ -267,7 +291,7 @@ local function fetch_one(proxy, ext, sys_archs)
 	local ok, parsed = pcall(jsonc.parse, res)
 	if not ok then return nil end
 
-	local rel = pick_newest(parsed)
+	local rel = pick_newest(parsed, ext)
 	if not rel then return nil end
 
 	local asset = pick_asset(rel, ext, sys_archs)
@@ -313,7 +337,7 @@ local function fetch_consensus_digest(ext)
 	end
 
 	if not best then
-		return nil, nil, "直连与所有加速节点均不可用，请检查网络或手动下载。"
+		return nil, nil, "未找到可用的安装包（新版本可能还没上传产物），请稍后重试或手动下载。"
 	end
 	if best_n < 2 then
 		return nil, nil, "直连不可用，且只有 1 个加速节点响应，无法交叉验证。请稍后重试或手动下载。"
@@ -329,12 +353,23 @@ function action_check_update()
 	local http = require "luci.http"
 	local current = get_installed_version()
 	local result = { current_version = current, has_update = false }
-	local rel, answered = fetch_latest_release()
+
+	local ext = get_pkg_ext()
+	if not ext then
+		result.error = "未找到 opkg 或 apk，无法判断可用的安装包类型"
+		http.prepare_content("application/json; charset=utf-8")
+		http.write_json(result)
+		return
+	end
+
+	local rel, answered = fetch_latest_release(ext)
 	if not rel then
-		if answered and not beta_enabled() then
-			result.error = "未找到正式版（当前仅存在测试版）。如需接收测试版，请在“其他设置”中开启。"
-		else
+		if not answered then
 			result.error = "所有节点请求失败，请检查外网是否通畅"
+		elseif not beta_enabled() then
+			result.error = "未找到带安装包的正式版。如需接收测试版，请在“其他设置”中开启。"
+		else
+			result.error = "最新版本还没有上传安装包，请稍后再试或手动下载。"
 		end
 	else
 		local latest = tostring(rel.tag_name):gsub("^v", "")
