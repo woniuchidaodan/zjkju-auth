@@ -63,33 +63,30 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 配置编译选项（IPK）
-        if: matrix.pkg_format == 'ipk'
+      - name: 配置编译选项（只配置 APK 格式）
         run: |
           cd /opt/sdk
-          echo "CONFIG_PACKAGE_luci-app-zjkju-auth=m" >> .config
-          echo "CONFIG_PACKAGE_luci-compat=y" >> .config
-          echo "CONFIG_PACKAGE_luci-base=y" >> .config
-          echo "CONFIG_PACKAGE_curl=y" >> .config
-          # 显式禁用 APK，确保生成 IPK
-          echo "# CONFIG_USE_APK is not set" >> .config
+          # 先跑一次 defconfig 初始化依赖树
           make defconfig
-
-      - name: 配置编译选项（APK）
-        if: matrix.pkg_format == 'apk'
-        run: |
-          cd /opt/sdk
-          echo "CONFIG_PACKAGE_luci-app-zjkju-auth=m" >> .config
-          echo "CONFIG_PACKAGE_luci-compat=y" >> .config
-          echo "CONFIG_PACKAGE_luci-base=y" >> .config
-          echo "CONFIG_PACKAGE_curl=y" >> .config
-          # 显式启用 APK
-          echo "CONFIG_USE_APK=y" >> .config
+          
+          # 根据矩阵变量设置格式
+          if [ "${{ matrix.pkg_format }}" = "apk" ]; then
+            echo "CONFIG_USE_APK=y" >> .config
+          else
+            echo "# CONFIG_USE_APK is not set" >> .config
+          fi
+          
+          # 再次 defconfig 确保格式配置生效
           make defconfig
+          
+          # 检查配置结果
+          echo "=== 当前 .config 中 apk 相关的配置 ==="
+          grep "CONFIG_USE_APK" .config || true
 
       - name: 开始编译
         run: |
           cd /opt/sdk
+          # 直接编译目标包，SDK 会自动拉取依赖 (luci-base 等)，不需要在 .config 中手动写 =m
           make package/luci-app-zjkju-auth/compile V=s -j$(nproc) 2>&1 | tee /tmp/build.log
 
       - name: 收集生成的 ${{ matrix.pkg_format }} 包
@@ -98,11 +95,18 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/output
           if [ "${{ matrix.pkg_format }}" = "ipk" ]; then
             find /opt/sdk/bin/packages -name "luci-app-zjkju-auth*.ipk" -exec cp -v {} $GITHUB_WORKSPACE/output/ \;
+            COUNT=$(find $GITHUB_WORKSPACE/output -name "*.ipk" | wc -l)
           else
             find /opt/sdk/bin/packages -name "luci-app-zjkju-auth*.apk" -exec cp -v {} $GITHUB_WORKSPACE/output/ \;
+            COUNT=$(find $GITHUB_WORKSPACE/output -name "*.apk" | wc -l)
           fi
           echo "=== 编译产物 ==="
           ls -la $GITHUB_WORKSPACE/output/
+          
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::编译完成但未找到任何 ${{ matrix.pkg_format }} 文件！请向上滚动查看编译日志中的报错。"
+            exit 1
+          fi
 
       - name: 提取版本号
         id: extract-version
@@ -119,7 +123,7 @@ jobs:
           name: pkg-${{ matrix.pkg_format }}
           path: ${{ github.workspace }}/output/*
           retention-days: 30
-          if-no-files-found: ignore
+          if-no-files-found: error
 
       - name: 上传编译日志
         if: always()
@@ -166,8 +170,6 @@ jobs:
           CHANNEL="${{ inputs.channel }}"
           VERSION="${{ needs.build.outputs.pkg_version }}"
 
-          # beta   -> tag 带 -beta 后缀 + 标记为预发布
-          # stable -> tag 不带后缀 + 正式版
           if [ "$CHANNEL" = "stable" ]; then
             TAG="v${VERSION}"
             TITLE="luci-app-zjkju-auth ${VERSION}"
@@ -186,7 +188,6 @@ jobs:
 
           NOTES_FILE="${GITHUB_WORKSPACE}/.github/RELEASE_NOTES.md"
 
-          # ---- 先确认真的有安装包，避免创建出"空壳 release" ----
           shopt -s nullglob
           PKGS=("${GITHUB_WORKSPACE}"/output/*.ipk "${GITHUB_WORKSPACE}"/output/*.apk)
           shopt -u nullglob
@@ -215,8 +216,6 @@ jobs:
           fi
 
           echo "==== 上传所有包 ===="
-          # 注意：不要用 *.ipk *.apk 这种裸 glob —— 没匹配到时 shell 会把字面量传进去，
-          # gh 会报 "no matches found" 导致整个上传失败，而 release 已经建好了却没有任何附件。
           gh release upload "$TAG" "${PKGS[@]}" --repo "$REPO" --clobber
 
           echo "==== 验证附件 ===="
