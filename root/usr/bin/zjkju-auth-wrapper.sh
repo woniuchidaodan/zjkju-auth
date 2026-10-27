@@ -377,7 +377,6 @@ while true; do
             touch "$ONLINE_FLAG"
         fi
 
-        # 【核心补丁】如果在线但对时未成功，强制将日志写入文件，避免前端永远空白
         [ "$CLOCK_SYNCED" != "1" ] && _force_flush_buffer
 
         STATE="online"; FAIL_COUNT=0; PENDING_COUNT=0; TIMEOUT_COUNT=0
