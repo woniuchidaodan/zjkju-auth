@@ -10,20 +10,6 @@ clean = clean:gsub("%-(%d+)$", "-r%1")
 if clean == "" then clean = "1.0.4-r10" end
 %>
 
-<div class="cbi-section">
-	<h3><%:版本更新%></h3>
-	<div class="cbi-section-node" style="padding:12px 0;">
-		<div style="margin-bottom:10px;">
-			<%:当前版本%>：<code><%=clean%></code>
-		</div>
-		<button type="button" class="cbi-button cbi-button-action" style="position: relative; outline: none;" onclick="zjkjuCheckUpdate()">
-			<%:检查更新%>
-			<span id="zjkju-red-dot" style="display: none; position: absolute; top: -4px; right: -4px; width: 10px; height: 10px; background-color: #e74c3c; border-radius: 50%; box-shadow: 0 0 0 2px #fff;"></span>
-		</button>
-		<span id="zjkju-update-msg" style="margin-left:10px;"></span>
-	</div>
-</div>
-
 <div id="zjkju-update-modal" class="zjkju-modal-overlay">
 	<div class="zjkju-modal">
 		<div class="zjkju-modal-header"><%:发现新版本%> <span id="zjkju-new-ver"></span></div>
