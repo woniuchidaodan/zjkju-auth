@@ -2,6 +2,15 @@ name: 🚀 测试（ipk + apk）
 
 on:
   workflow_dispatch:
+    inputs:
+      channel:
+        description: '发布通道（beta=预发布，stable=正式版）'
+        required: true
+        default: beta
+        type: choice
+        options:
+          - beta
+          - stable
 
 permissions: write-all
 
@@ -154,28 +163,46 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
-          # 强制在版本号后加上 beta 标识，防止与正式版冲突
-          TAG="v${{ needs.build.outputs.pkg_version }}-beta"
-          TITLE="luci-app-zjkju-auth ${{ needs.build.outputs.pkg_version }} Beta"
+          CHANNEL="${{ inputs.channel }}"
+          VERSION="${{ needs.build.outputs.pkg_version }}"
+
+          # beta   -> tag 带 -beta 后缀 + 标记为预发布
+          # stable -> tag 不带后缀 + 正式版
+          if [ "$CHANNEL" = "stable" ]; then
+            TAG="v${VERSION}"
+            TITLE="luci-app-zjkju-auth ${VERSION}"
+            PRE_FLAG=""
+          else
+            TAG="v${VERSION}-beta"
+            TITLE="luci-app-zjkju-auth ${VERSION} Beta"
+            PRE_FLAG="--prerelease"
+          fi
+
+          echo "==== 发布通道: $CHANNEL ===="
+          echo "==== TAG: $TAG ===="
 
           echo "==== 删除旧 Release (如果存在) ===="
           gh release delete "$TAG" --repo "$REPO" --yes --cleanup-tag 2>/dev/null || echo "旧 Release 不存在"
 
           echo "==== 创建新 Release: $TAG ===="
-          gh release create "$TAG" \
-            --repo "$REPO" \
-            --title "$TITLE" \
-            --prerelease \
-            --notes "## luci-app-zjkju-auth ${{ needs.build.outputs.pkg_version }} (Beta 测试版)
+          NOTES_FILE="${GITHUB_WORKSPACE}/.github/RELEASE_NOTES.md"
 
-          湛江科技学院锐捷 ePortal 校园网自动认证的 LuCI 应用。
-
-          ### 🚀 核心更新
-          - **修复稳定性偶现问题，提升使用体验**
-          - **修复升级后用户名、密码被清空的问题**
-          - **修复日志偶发消失的问题**
-          - **优化在线更新逻辑，支持直连优先与真实进度显示**
-          - **启动速度提升，日志时间自动校准**"
+          echo "==== 创建新 Release: $TAG ===="
+          if [ -f "$NOTES_FILE" ]; then
+            echo "使用 RELEASE_NOTES.md 作为发布说明"
+            gh release create "$TAG" \
+              --repo "$REPO" \
+              --title "$TITLE" \
+              $PRE_FLAG \
+              --notes-file "$NOTES_FILE"
+          else
+            echo "未找到 RELEASE_NOTES.md，改为自动生成变更列表"
+            gh release create "$TAG" \
+              --repo "$REPO" \
+              --title "$TITLE" \
+              $PRE_FLAG \
+              --generate-notes
+          fi
 
           echo "==== 上传所有包 ===="
           gh release upload "$TAG" \
