@@ -180,10 +180,8 @@ window.zjkjuInstallUpdate = function() {
 				return;
 			}
 			
-			var startTime = Math.floor(Date.now() / 1000);
 			var timer = setInterval(function() {
 				var now = Math.floor(Date.now() / 1000);
-				var elapsed = now - startTime;
 				XHR.get(zjkjuStatusUrl + '?t=' + now, null, function(y) {
 					var text = (y && y.status === 200) ? y.responseText : '';
 					
@@ -209,14 +207,14 @@ window.zjkjuInstallUpdate = function() {
 						btn.textContent = '立即更新';
 					} else if (state === '1') {
 						btn.textContent = n > 0 
-							? '下载中 ' + n + '% (' + elapsed + 's)' 
-							: '下载中 (' + elapsed + 's)...';
+							? '下载中 ' + n + '%' 
+							: '下载中...';
 					} else if (state === '2') {
 						btn.textContent = '校验中...';
 					} else if (state === '3') {
 						btn.textContent = '安装中...';
 					} else {
-						btn.textContent = (msg || '处理中') + ' (' + elapsed + 's)...';
+						btn.textContent = (msg || '处理中') + '...';
 					}
 				});
 			}, 1000);
@@ -247,13 +245,13 @@ function m.on_after_commit(self)
 		luci.sys.call("/etc/init.d/zjkju-auth enable >/dev/null 2>&1")
 		luci.sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
 
-		-- 1. 轮询等待旧进程彻底退出（防止点两次，极速完成）
-		luci.sys.call("i=0; while pidof zjkju-auth-wrapper.sh >/dev/null 2>&1 && [ $i -lt 20 ]; do i=$((i+1)); sleep 0.1 2>/dev/null; done")
+		-- ① 等旧进程退出（它最多 1 秒就响应 TERM 并 flush 缓冲），最多等 2 秒
+		luci.sys.call("i=0; while [ $i -lt 20 ] && { pidof zjkju-auth-wrapper.sh >/dev/null 2>&1 || pidof zjkju-auth-wrapper >/dev/null 2>&1; }; do i=$((i+1)); sleep 0.1 2>/dev/null; done")
 
-		-- 2. 强制阻塞剩余时间，拉长后端响应，触发前端 1.0.2 同款的“全局读秒”
-		luci.sys.call("sleep 1")
+		-- ② 万一仍残留（卡在 I/O 等），强杀，确保 start 一定能注册成功
+		luci.sys.call("pidof zjkju-auth-wrapper.sh >/dev/null 2>&1 || pidof zjkju-auth-wrapper >/dev/null 2>&1 && killall -9 zjkju-auth-wrapper.sh zjkju-auth-wrapper 2>/dev/null")
 
-		-- 3. 启动服务并记录失败日志
+		-- ③ 启动并记录失败
 		local rc = luci.sys.call("/etc/init.d/zjkju-auth start >/dev/null 2>&1")
 		if rc ~= 0 then
 			luci.sys.call("logger -t zjkju-auth 'start after commit failed, rc=" .. rc .. "'")
@@ -268,8 +266,6 @@ function m.on_after_commit(self)
 		luci.sys.call("rm -f /var/log/zjkju-auth/status /var/log/zjkju-auth/last-url /var/log/zjkju-auth/online-printed 2>/dev/null")
 		luci.sys.call("rm -f /tmp/zjkju_do_update.sh /tmp/zjkju_update_status 2>/dev/null")
 		
-		-- 禁用分支同样强制阻塞 1 秒，让用户看到读秒结束再刷新
-		luci.sys.call("sleep 1")
 	end
 end
 
