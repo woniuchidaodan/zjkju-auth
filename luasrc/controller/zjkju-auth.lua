@@ -4,7 +4,7 @@ local STATE_DIR   = "/var/log/zjkju-auth"
 local LOG_FILE    = STATE_DIR .. "/auth.log"
 local STATUS_FILE = STATE_DIR .. "/status"
 
-local FALLBACK_VERSION = "1.0.4-r7"
+local FALLBACK_VERSION = "1.0.4-r8"
 
 local GITHUB_PROXIES = {
 	"",
@@ -125,7 +125,11 @@ local function get_installed_version()
 		v = sys.exec("apk info -v luci-app-zjkju-auth 2>/dev/null | head -n1 | cut -d'-' -f2-")
 	end
 	v = (v or ""):gsub("%s+", "")
-	local clean_v = v:match("([0-9%.]+%-r[0-9]+%a*)") or v:match("([0-9%.]+)") or ""
+	local clean_v = v:match("([0-9%.]+%-r[0-9]+%a*)")
+		or v:match("([0-9%.]+%-[0-9]+)")
+		or v:match("([0-9%.]+)") or ""
+	-- opkg 的 Version 形如 "1.0.4-8"，统一规范成 "1.0.4-r8" 才能和 tag 比较
+	clean_v = clean_v:gsub("%-(%d+)$", "-r%1")
 	return (clean_v ~= "" and clean_v) or FALLBACK_VERSION
 end
 
