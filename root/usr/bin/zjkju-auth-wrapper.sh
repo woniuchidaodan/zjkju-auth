@@ -162,7 +162,15 @@ do_ntp_sync() {
         if [ "$ntpd_done" = "1" ]; then
             wait "$NTP_PID" 2>/dev/null; rc=$?
         else
-            kill "$NTP_PID" 2>/dev/null; wait "$NTP_PID" 2>/dev/null; rc=1
+            # 不能无界等待：ntpd 未必响应 SIGTERM，卡住会把整个主循环拖死
+            kill "$NTP_PID" 2>/dev/null
+            i=0
+            while kill -0 "$NTP_PID" 2>/dev/null && [ "$i" -lt 3 ]; do
+                i=$((i + 1))
+                sleep 1
+            done
+            kill -9 "$NTP_PID" 2>/dev/null
+            rc=1
         fi
 
         if [ "$stepped" = "1" ] || [ "$rc" = "0" ]; then CLOCK_SYNCED=1; fi
