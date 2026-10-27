@@ -41,9 +41,9 @@ function action_update_status()
 	local status_file = "/tmp/zjkju_update_status"
 	http.prepare_content("text/plain; charset=utf-8")
 	if fs.access(status_file) then
-		http.write(fs.readfile(status_file) or "0|等待中")
+		http.write(fs.readfile(status_file) or "0|等待中|0")
 	else
-		http.write("0|等待中")
+		http.write("0|等待中|0")
 	end
 end
 
@@ -257,34 +257,36 @@ local function fetch_one(proxy, ext, sys_archs)
 	local asset = pick_asset(rel, ext, sys_archs)
 	local d = asset and asset.digest and tostring(asset.digest):gsub("^sha256:", "")
 	local u = asset and asset.browser_download_url
+	local sz = asset and asset.size
 
 	if not (d and d:match("^%x+$") and #d == 64 and u and u:match(ASSET_URL_RE)) then
 		return nil
 	end
-	return d, u, tostring(rel.tag_name)
+	return d, u, tostring(rel.tag_name), sz
 end
 
 local function fetch_consensus_digest(ext)
 	local sys_archs = get_system_archs()
 	local started = os.time()
 
-	local d, u, t = fetch_one("", ext, sys_archs)
+	local d, u, t, sz = fetch_one("", ext, sys_archs)
 	if d then
-		return d, u, nil, t
+		return d, u, nil, t, sz
 	end
 
-	local votes, urls, tags, responses = {}, {}, {}, 0
+	local votes, urls, tags, sizes, responses = {}, {}, {}, {}, 0
 
 	for _, proxy in ipairs(GITHUB_PROXIES) do
 		if proxy ~= "" then
 			if os.time() - started >= CONSENSUS_BUDGET then break end
 
-			local dd, uu, tt = fetch_one(proxy, ext, sys_archs)
+			local dd, uu, tt, ss = fetch_one(proxy, ext, sys_archs)
 			if dd then
 				responses = responses + 1
 				votes[dd] = (votes[dd] or 0) + 1
 				urls[dd]  = uu
 				tags[dd]  = tt
+				sizes[dd] = ss
 			end
 		end
 	end
@@ -304,7 +306,7 @@ local function fetch_consensus_digest(ext)
 		return nil, nil, "多个加速节点返回的校验值不一致（可能缓存不同步），请稍后重试。"
 	end
 
-	return best, urls[best], nil, tags[best]
+	return best, urls[best], nil, tags[best], sizes[best]
 end
 
 function action_check_update()
@@ -356,7 +358,7 @@ function action_do_update()
 	end
 	local ext = has_opkg and "ipk" or "apk"
 
-	local want_hash, url, err, tag = fetch_consensus_digest(ext)
+	local want_hash, url, err, tag, size = fetch_consensus_digest(ext)
 	if not want_hash then
 		http.write_json({ success = false, error = err })
 		return
@@ -373,7 +375,8 @@ function action_do_update()
 		return
 	end
 
-	fs.writefile("/tmp/zjkju_update_status", "0|准备中")
+	local total_size = tonumber(size) or 0
+	fs.writefile("/tmp/zjkju_update_status", "0|准备中|0")
 	
 	local bg_script = "/tmp/zjkju_do_update.sh"
 	local script_content = string.format([[
@@ -381,11 +384,12 @@ function action_do_update()
 URL="%s"
 EXT="%s"
 WANT_HASH="%s"
+TOTAL_HINT="%s"
 TARGET="/tmp/zjkju_auth_update.$EXT"
 STATUS_FILE="/tmp/zjkju_update_status"
 PROXIES="/ gh-proxy.com/ ghfast.top/"
 
-echo "1|下载中" > "$STATUS_FILE"
+echo "1|下载中|0" > "$STATUS_FILE"
 
 for P in $PROXIES; do
     if [ "$P" = "/" ]; then
@@ -394,13 +398,38 @@ for P in $PROXIES; do
         FULL_URL="https://$P$URL"
     fi
 
-    curl -sS --fail -L --connect-timeout 4 --max-time 60 -o "$TARGET" "$FULL_URL"
+    TOTAL="$TOTAL_HINT"
+    [ -z "$TOTAL" ] && TOTAL=0
+    if [ "$TOTAL" -eq 0 ]; then
+        TOTAL=$(curl -sIL --max-time 10 "$FULL_URL" 2>/dev/null | tr -d '\r' | awk 'tolower($1)=="content-length:"{v=$2} END{print v}')
+        [ -z "$TOTAL" ] && TOTAL=0
+    fi
 
-    if [ -s "$TARGET" ]; then
-        echo "2|校验中" > "$STATUS_FILE"
+    rm -f "$TARGET"
+    
+    curl -sS --fail -L --connect-timeout 4 --max-time 60 -o "$TARGET" "$FULL_URL" 2>/dev/null &
+    CPID=$!
+
+    n=0
+    while kill -0 "$CPID" 2>/dev/null; do
+        n=$((n + 1))
+        [ "$n" -gt 90 ] && break
+        CUR=$(wc -c < "$TARGET" 2>/dev/null || echo 0)
+        if [ "$TOTAL" -gt 0 ] 2>/dev/null; then
+            echo "1|下载中|$((CUR * 100 / TOTAL))" > "$STATUS_FILE"
+        else
+            echo "1|下载中" > "$STATUS_FILE"
+        fi
+        sleep 1
+    done
+    wait "$CPID" 2>/dev/null
+    CURL_RC=$?
+
+    if [ "$CURL_RC" = "0" ] && [ -s "$TARGET" ]; then
+        echo "2|校验中|100" > "$STATUS_FILE"
         GOT_HASH=$(sha256sum "$TARGET" | awk '{print $1}')
         if [ "$GOT_HASH" = "$WANT_HASH" ]; then
-            echo "3|安装中" > "$STATUS_FILE"
+            echo "3|安装中|100" > "$STATUS_FILE"
             if command -v opkg >/dev/null 2>&1; then
                 opkg install "$TARGET" >/dev/null 2>&1
             else
@@ -408,16 +437,16 @@ for P in $PROXIES; do
             fi
             rm -f "$TARGET" "$0"
             /etc/init.d/zjkju-auth restart >/dev/null 2>&1
-            echo "4|安装完成" > "$STATUS_FILE"
+            echo "4|安装完成|100" > "$STATUS_FILE"
             exit 0
         fi
     fi
     rm -f "$TARGET"
 done
-echo "-1|下载失败或校验不通过，请重试或手动下载" > "$STATUS_FILE"
+echo "-1|下载失败或校验不通过，请重试或手动下载|0" > "$STATUS_FILE"
 rm -f "$0"
 exit 1
-]], url, ext, want_hash)
+]], url, ext, want_hash, total_size)
 
 	fs.writefile(bg_script, script_content)
 	sys.call("chmod +x " .. bg_script)
