@@ -1,0 +1,225 @@
+<%
+local fs = require "nixio.fs"
+local logfile = "/var/log/zjkju-auth/auth.log"
+local log = ""
+
+if fs.access(logfile) then
+	log = fs.readfile(logfile) or ""
+end
+
+if not log or log == "" then
+	log = "（暂无日志，服务可能还未启动过）"
+else
+	local lines = {}
+	for line in (log .. "\n"):gmatch("(.-)\n") do
+		if line ~= "" then lines[#lines + 1] = line end
+	end
+	local start = math.max(1, #lines - 100 + 1)
+	local buf = {}
+	for i = start, #lines do buf[#buf + 1] = lines[i] end
+	log = table.concat(buf, "\n")
+end
+%>
+
+<style>
+.zjkju-wrapper { padding: 20px; }
+.zjkju-toolbar {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 15px;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+.zjkju-toolbar-left {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+.zjkju-toolbar-right {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+.zjkju-label { color: #666; font-size: 13px; font-weight: 500; }
+.zjkju-badge {
+	display: inline-block;
+	padding: 3px 10px;
+	border-radius: 12px;
+	font-size: 12px;
+	font-weight: 500;
+	color: #fff;
+}
+.zjkju-badge-online   { background: #27ae60; }
+.zjkju-badge-offline  { background: #e74c3c; }
+.zjkju-badge-unknown  { background: #95a5a6; }
+.zjkju-badge-stopped  { background: #7f8c8d; }
+.zjkju-badge-disabled { background: #6c757d; }
+.zjkju-badge-cooling  { background: #f39c12; }
+.zjkju-status-time { font-size: 12px; color: #888; white-space: nowrap; }
+.zjkju-log-box {
+	background: #1e1e1e;
+	color: #d4d4d4;
+	font-family: Menlo, Consolas, Monaco, monospace;
+	font-size: 12px;
+	line-height: 1.5;
+	padding: 12px;
+	border-radius: 6px;
+	height: 400px;
+	overflow-y: auto;
+	overflow-x: hidden;
+	white-space: pre-wrap;
+	word-break: break-all;
+	margin: 0;
+}
+.zjkju-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 8px 18px;
+	background: #2f80ed;
+	color: #fff;
+	border: none;
+	border-radius: 8px;
+	cursor: pointer;
+	font-size: 13px;
+	font-weight: 500;
+	white-space: nowrap;
+	letter-spacing: 0.3px;
+	box-shadow: 0 1px 3px rgba(47, 128, 237, 0.2);
+	transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+	user-select: none;
+}
+.zjkju-btn:hover { background: #1c6dd0; box-shadow: 0 4px 10px rgba(47, 128, 237, 0.35); transform: translateY(-1px); }
+.zjkju-btn:active { background: #155bb5; box-shadow: 0 1px 2px rgba(47, 128, 237, 0.3); transform: translateY(0); }
+.zjkju-btn:focus { outline: none; box-shadow: 0 0 0 3px rgba(47, 128, 237, 0.25); }
+.zjkju-btn-danger { background: #e74c3c; box-shadow: 0 1px 3px rgba(231, 76, 60, 0.2); }
+.zjkju-btn-danger:hover { background: #c0392b; box-shadow: 0 4px 10px rgba(231, 76, 60, 0.35); transform: translateY(-1px); }
+.zjkju-btn-danger:active { background: #a93226; box-shadow: 0 1px 2px rgba(231, 76, 60, 0.3); transform: translateY(0); }
+.zjkju-btn-danger:focus { box-shadow: 0 0 0 3px rgba(231, 76, 60, 0.25); }
+</style>
+
+<div class="cbi-section">
+	<div class="zjkju-wrapper">
+		<div class="zjkju-toolbar">
+			<div class="zjkju-toolbar-left">
+				<span class="zjkju-label"><%:当前状态%>:</span>
+				<span id="zjkju-status-badge" class="zjkju-badge zjkju-badge-unknown"><%:检测中%></span>
+				<span class="zjkju-label" style="margin-left: 12px;"><%:服务进程%>:</span>
+				<span id="zjkju-daemon-badge" class="zjkju-badge zjkju-badge-unknown"><%:检测中%></span>
+				<span class="zjkju-status-time" id="zjkju-status-time" style="margin-left: 12px;"></span>
+			</div>
+			<div class="zjkju-toolbar-right">
+				<button class="zjkju-btn" onclick="zjkjuRefresh()"><%:立即刷新%></button>
+				<button class="zjkju-btn" onclick="zjkjuRestart()"><%:重启服务%></button>
+				<button class="zjkju-btn zjkju-btn-danger" onclick="zjkjuClearLog()"><%:清空日志%></button>
+			</div>
+		</div>
+		<pre class="zjkju-log-box" id="zjkju-log"><%=pcdata(log)%></pre>
+	</div>
+</div>
+
+<script type="text/javascript">
+(function() {
+	var logUrl     = '<%=luci.dispatcher.build_url("admin", "services", "zjkju-auth", "log")%>';
+	var restartUrl = '<%=luci.dispatcher.build_url("admin", "services", "zjkju-auth", "restart")%>';
+	var clearUrl   = '<%=luci.dispatcher.build_url("admin", "services", "zjkju-auth", "clearlog")%>';
+	var statusUrl  = '<%=luci.dispatcher.build_url("admin", "services", "zjkju-auth", "status")%>';
+
+	var logBox       = document.getElementById('zjkju-log');
+	var netBadge     = document.getElementById('zjkju-status-badge');
+	var daemonBadge  = document.getElementById('zjkju-daemon-badge');
+	var statusTime   = document.getElementById('zjkju-status-time');
+	if (!logBox) return;
+
+	logBox.scrollTop = logBox.scrollHeight;
+
+	function nowTime() {
+		var d = new Date();
+		var pad = function(n){ return n < 10 ? '0' + n : n; };
+		return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+	}
+
+	function setBadge(el, text, cls) {
+		if (!el) return;
+		el.textContent = text;
+		el.className = 'zjkju-badge ' + cls;
+	}
+
+	window.zjkjuRefresh = function() {
+		XHR.get(logUrl, null, function(x) {
+			if (x && x.status === 200 && x.responseText !== undefined) {
+				var atBottom = (logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight) < 30;
+				logBox.textContent = x.responseText;
+				if (atBottom) logBox.scrollTop = logBox.scrollHeight;
+			}
+		});
+	};
+
+	function zjkjuStatusRefresh() {
+		XHR.get(statusUrl, null, function(x) {
+			if (!x || x.status !== 200) {
+				setBadge(netBadge, '<%:未知%>', 'zjkju-badge-unknown');
+				setBadge(daemonBadge, '<%:未知%>', 'zjkju-badge-unknown');
+				return;
+			}
+			try {
+				var data = JSON.parse(x.responseText);
+
+				if (data.running) {
+					setBadge(daemonBadge, '<%:运行中%>', 'zjkju-badge-online');
+				} else {
+					setBadge(daemonBadge, '<%:未运行%>', 'zjkju-badge-stopped');
+				}
+
+				if (data.enabled !== "1") {
+					setBadge(netBadge, '<%:已禁用%>', 'zjkju-badge-disabled');
+				} else if (!data.running) {
+					setBadge(netBadge, '<%:未运行%>', 'zjkju-badge-stopped');
+				} else if (data.status === 'noconfig') {
+					setBadge(netBadge, '<%:未配置%>', 'zjkju-badge-unknown');
+				} else if (data.status === 'cooling') {
+					setBadge(netBadge, '<%:冷却中%>', 'zjkju-badge-cooling');
+				} else if (data.online) {
+					setBadge(netBadge, '<%:在线%>', 'zjkju-badge-online');
+				} else {
+					setBadge(netBadge, '<%:离线%>', 'zjkju-badge-offline');
+				}
+
+				if (statusTime) {
+					statusTime.textContent = '状态更新: ' + nowTime();
+				}
+			} catch(e) {
+				setBadge(netBadge, '<%:未知%>', 'zjkju-badge-unknown');
+				setBadge(daemonBadge, '<%:未知%>', 'zjkju-badge-unknown');
+			}
+		});
+	}
+
+	window.zjkjuRestart = function() {
+		if (!confirm('<%:确定要重启认证服务吗？%>')) return;
+		XHR.get(restartUrl, null, function() {
+			setTimeout(function() {
+				window.zjkjuRefresh();
+				zjkjuStatusRefresh();
+			}, 2000);
+		});
+	};
+
+	window.zjkjuClearLog = function() {
+		if (!confirm('<%:确定要清空日志吗？%>')) return;
+		XHR.get(clearUrl, null, function(x) {
+			if (x && x.status === 200) {
+				logBox.textContent = '（日志文件已被物理清空）';
+			}
+		});
+	};
+
+	window.zjkjuRefresh();
+	zjkjuStatusRefresh();
+	setInterval(window.zjkjuRefresh, 10000);
+	setInterval(zjkjuStatusRefresh, 5000);
+})();
+</script>

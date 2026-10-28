@@ -1,0 +1,11 @@
+{
+	"luci-app-zjkju-auth": {
+		"description": "Grant UCI access for luci-app-zjkju-auth",
+		"read": {
+			"uci": [ "zjkju-auth" ]
+		},
+		"write": {
+			"uci": [ "zjkju-auth" ]
+		}
+	}
+}
