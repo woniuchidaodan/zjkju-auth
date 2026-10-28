@@ -72,17 +72,38 @@ o = s:taboption("other", DummyValue, "_log_location", translate("日志文件"))
 o.default = "/var/log/zjkju-auth/auth.log"
 o.description = translate("日志同时写入系统日志和本地文件。同目录下还有 status、last-url 等运行时文件。")
 
+-- 版本更新：这里只放"版本号 + 按钮"的轻量 HTML（无 style 块、无 script、无弹窗结构），
+-- 弹窗、样式和脚本都放在 update.htm 里，避免它们混进 CBI 控件影响变更检测。
+o = s:taboption("other", DummyValue, "_version_check", translate("版本更新"))
+o.rawhtml = true
+o.default = [=[<div style="margin-top:4px;">]=] .. [=[
+	<div style="margin-bottom:6px;">当前版本：<code>]=] .. PKG_VERSION .. [=[</code></div>
+	<button type="button" class="cbi-button cbi-button-action" style="position:relative;outline:none;" onclick="zjkjuCheckUpdate()">
+		检查更新
+		<span id="zjkju-red-dot" style="display:none;position:absolute;top:-4px;right:-4px;width:10px;height:10px;background:#e74c3c;border-radius:50%;box-shadow:0 0 0 2px #fff;"></span>
+	</button>
+	<span id="zjkju-update-msg" style="margin-left:10px;"></span>
+</div>]=]
+
 -- 日志面板：独立模板，位于标签页下方
 local sec = m:section(SimpleSection)
 sec.template = "zjkju-auth/log"
 
--- 版本更新：独立模板（HTML + 脚本都在模板里，不进 CBI 控件）
+-- 版本更新：弹窗 + 样式 + 脚本独立模板（在标签页下方，不进 CBI 控件）
 local sec2 = m:section(SimpleSection)
 sec2.template = "zjkju-auth/update"
 
 -- 保存后根据 enabled 决定启动还是停止。
 -- 注意：on_after_commit 触发时配置文件可能尚未落盘，
 -- 必须先 commit，否则 /etc/init.d 的 start_service 读到的还是旧值（表现为"要点两次"）。
+-- ============================================================
+-- 【硬性约束 · 不要改动】
+--   ① 读秒：下面的 sleep 2 是前端「正在应用更改」遮罩可见的前提。
+--      不能删除、不能小于 2 秒，否则遮罩一闪而过或完全不出现。
+--   ② 一次点击生效：必须先 self.uci:commit()，再调用 start。
+--      否则 start_service 读到的还是旧配置，表现为「要点两次保存才生效」。
+--   ③ 徽章：进程状态由 controller 用 ubus 判断，不要改回 pidof。
+-- ============================================================
 function m.on_after_commit(self)
 	self.uci:commit("zjkju-auth")
 	sys.call("uci commit zjkju-auth")
