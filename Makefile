@@ -71,7 +71,6 @@ define Package/luci-app-zjkju-auth/install
 	$(INSTALL_DATA) ./luasrc/controller/zjkju-auth.lua $(1)/usr/lib/lua/luci/controller/zjkju-auth.lua
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/model/cbi/zjkju-auth
 	$(INSTALL_DATA) ./luasrc/model/cbi/zjkju-auth/main.lua $(1)/usr/lib/lua/luci/model/cbi/zjkju-auth/main.lua
-	$(INSTALL_DATA) ./luasrc/model/cbi/zjkju-auth/other.lua $(1)/usr/lib/lua/luci/model/cbi/zjkju-auth/other.lua
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/zjkju-auth
 	$(INSTALL_DATA) ./luasrc/view/zjkju-auth/log.htm $(1)/usr/lib/lua/luci/view/zjkju-auth/log.htm
 	$(INSTALL_DATA) ./luasrc/view/zjkju-auth/update.htm $(1)/usr/lib/lua/luci/view/zjkju-auth/update.htm
