@@ -97,6 +97,8 @@ function action_restart()
 	http.write("服务已重启")
 end
 
+local get_installed_version   -- 前向声明：下面 action_status 里要用
+
 function action_status()
 	local http = require "luci.http"
 	local sys = require "luci.sys"
@@ -128,11 +130,12 @@ function action_status()
 	end
 	http.prepare_content("application/json; charset=utf-8")
 	http.write_json({
-		enabled = enabled, running = running, online = (status == "online"), status = status, ts = os.time()
+		enabled = enabled, running = running, online = (status == "online"),
+		status = status, version = get_installed_version(), ts = os.time()
 	})
 end
 
-local function get_installed_version()
+function get_installed_version()
 	local sys = require "luci.sys"
 	local v = sys.exec("opkg status luci-app-zjkju-auth 2>/dev/null | grep '^Version:' | awk '{print $2}'")
 	if not v or v == "" then
