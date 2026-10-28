@@ -1,0 +1,8 @@
+#!/bin/sh
+
+# 首次安装：不自动启用服务，留给用户手动勾选
+# 用户勾选启用后，由 LuCI 的 on_after_commit 处理
+
+# 不 enable（不创建 rc.d 软链）、不 start
+
+exit 0
