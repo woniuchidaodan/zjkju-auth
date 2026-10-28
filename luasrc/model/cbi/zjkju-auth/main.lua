@@ -38,13 +38,15 @@ o.rmempty = false
 o = s:taboption("basic", Value, "username", translate("用户名"),
 	translate("用户名，一般为学号，如果是新生且无学号，用户名一般为ZK开头的临时账号"))
 o.datatype = "string"
-o.rmempty = false
+-- rmempty = true：清空保存时直接从配置里删除该项，避免空值写不进去导致旧值残留
+o.rmempty = true
 
 o = s:taboption("basic", Value, "password", translate("密码"),
 	translate("密码，初始为身份证后六位"))
 o.password = true
 o.datatype = "string"
-o.rmempty = false
+-- 同上：清空即删除配置项
+o.rmempty = true
 
 o = s:taboption("basic", ListValue, "service", translate("服务类型"),
 	translate("默认使用“电信校园网”，一般无需修改"))
