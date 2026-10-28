@@ -126,6 +126,11 @@ function renderLogPanel() {
 			else                              setBadge(netBadge, _('离线'), 'zjkju-badge-offline');
 
 			tmSpan.textContent = _('状态更新') + ': ' + nowStr();
+
+			if (d.version) {
+				var tv = document.getElementById('zjkju-title-ver');
+				if (tv) tv.textContent = 'Version: ' + d.version;
+			}
 		}).catch(function() {
 			setBadge(netBadge, _('未知'), 'zjkju-badge-unknown');
 			setBadge(dmnBadge, _('未知'), 'zjkju-badge-unknown');
@@ -322,7 +327,15 @@ return view.extend({
 	render: function() {
 		var m, s, o;
 
-		m = new form.Map('zjkju-auth', _('ZJKJU 校园网认证'),
+		// 标题带版本号：先占位，拿到 status 里的 version 后填进去（与 1.0.4 标题一致）
+		m = new form.Map('zjkju-auth',
+			E('span', {}, [
+				_('ZJKJU 校园网认证'), ' ',
+				E('span', {
+					'id': 'zjkju-title-ver',
+					'style': 'font-size:12px;color:#888;font-weight:normal;margin-left:8px;'
+				}, [ '...' ])
+			]),
 			_('在路由器上自动完成校园网 ePortal 认证。填写学号和密码后，勾选「启用」并保存。'));
 
 		s = m.section(form.NamedSection, 'main', 'zjkju-auth', _('认证设置'));
@@ -372,14 +385,26 @@ return view.extend({
 		o.rawhtml = true;
 		o.cfgvalue = function() { return versionNode(); };
 
-		return Promise.resolve(m.render()).then(function(node) {
-			var root = E('div', {}, [
-				E('style', {}, [ CSS_LOG + '\n' + CSS_UPDATE ]),
-				node
-			]);
-			root.appendChild(renderLogPanel());
-			root.appendChild(renderUpdatePanel());
-			return root;
-		});
+		// 状态 + 日志面板：自定义 section，位于表单下方（与 1.0.4 布局一致）
+		s = m.section(form.TypedSection);
+		s.anonymous = true;
+		s.render = function() {
+			return renderLogPanel();
+		};
+
+		// 更新弹窗：自定义 section，默认隐藏，只提供 DOM 锚点
+		s = m.section(form.TypedSection);
+		s.anonymous = true;
+		s.render = function() {
+			return renderUpdatePanel();
+		};
+
+		// 样式注入（与 log.htm / update.htm 同一套）
+		document.head.appendChild(E('style', { 'type': 'text/css' }, [ CSS_LOG + '\n' + CSS_UPDATE ]));
+
+		// 与 sbwml/luci-app-mentohust 完全一致：直接返回 m.render()
+		// 页脚的 [保存并应用] [保存] [复位] 由 form.Map 自己渲染，
+		// 不要覆盖 handleSaveApply / handleSave / handleReset
+		return m.render();
 	}
 });
