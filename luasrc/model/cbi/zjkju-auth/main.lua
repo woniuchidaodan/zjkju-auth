@@ -80,10 +80,12 @@ o = s:taboption("other", DummyValue, "_version_check", translate("版本更新")
 o.rawhtml = true
 o.default = [=[<div style="margin-top:4px;">]=] .. [=[
 	<div style="margin-bottom:6px;">当前版本：<code>]=] .. PKG_VERSION .. [=[</code></div>
-	<button type="button" class="cbi-button cbi-button-action" style="position:relative;outline:none;" onclick="zjkjuCheckUpdate()">
+	<span style="display:inline-block;">
+	<button type="button" class="cbi-button cbi-button-action" style="position:relative;outline:none;display:inline-block!important;width:auto!important;min-width:0!important;max-width:100%!important;height:auto!important;min-height:0!important;line-height:1.5!important;padding:6px 16px!important;margin:0!important;font-size:13px!important;box-sizing:border-box!important;" onclick="zjkjuCheckUpdate()">
 		检查更新
 		<span id="zjkju-red-dot" style="display:none;position:absolute;top:-4px;right:-4px;width:10px;height:10px;background:#e74c3c;border-radius:50%;box-shadow:0 0 0 2px #fff;"></span>
 	</button>
+	</span>
 	<span id="zjkju-update-msg" style="margin-left:10px;"></span>
 </div>]=]
 
