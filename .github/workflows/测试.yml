@@ -54,8 +54,15 @@ jobs:
           cp $GITHUB_WORKSPACE/Makefile /opt/sdk/package/luci-app-zjkju-auth/
           cp -r $GITHUB_WORKSPACE/luasrc /opt/sdk/package/luci-app-zjkju-auth/
           cp -r $GITHUB_WORKSPACE/root /opt/sdk/package/luci-app-zjkju-auth/
+          # JS 视图（LuCI 23.05+ 的界面文件），Makefile 会把它装到 /www/luci-static/resources/
+          if [ -d "$GITHUB_WORKSPACE/htdocs" ]; then
+            cp -r $GITHUB_WORKSPACE/htdocs /opt/sdk/package/luci-app-zjkju-auth/
+          else
+            echo "::error::仓库里缺少 htdocs 目录，JS 视图无法打包"
+            exit 1
+          fi
           echo "=== 软件包文件树 ==="
-          find /opt/sdk/package/luci-app-zjkju-auth -type f | head -30
+          find /opt/sdk/package/luci-app-zjkju-auth -type f | sort
 
       - name: 更新并安装 feeds
         run: |
@@ -89,6 +96,7 @@ jobs:
 
       - name: 开始编译
         run: |
+          set -o pipefail          # 关键：不加这个，make 失败会被 tee 掩盖成成功
           cd /opt/sdk
           make package/luci-app-zjkju-auth/compile V=s -j$(nproc) 2>&1 | tee /tmp/build.log
 
@@ -103,6 +111,12 @@ jobs:
           fi
           echo "=== 编译产物 ==="
           ls -la $GITHUB_WORKSPACE/output/
+          COUNT=$(ls -1 $GITHUB_WORKSPACE/output/ 2>/dev/null | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::编译没有产出任何 ${{ matrix.pkg_format }} 包，请检查上面的编译日志"
+            exit 1
+          fi
+          echo "共收集到 $COUNT 个文件"
 
       - name: 提取版本号
         id: extract-version
@@ -119,7 +133,7 @@ jobs:
           name: pkg-${{ matrix.pkg_format }}
           path: ${{ github.workspace }}/output/*
           retention-days: 30
-          if-no-files-found: ignore
+          if-no-files-found: error
 
       - name: 上传编译日志
         if: always()
