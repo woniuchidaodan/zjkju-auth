@@ -221,5 +221,66 @@ end
 	zjkjuStatusRefresh();
 	setInterval(window.zjkjuRefresh, 10000);
 	setInterval(zjkjuStatusRefresh, 5000);
+
+	// ============================================================
+	// 「保存并应用」拦截
+	//
+	// 为什么需要：传统 CBI 的「保存并应用」是普通表单 POST，
+	// 服务端在 cbi.lua 的 Map.apply() 里就把改动 commit 掉了，
+	// 前端的 ui.changes.apply() 找不到待应用项，所以永远不显示
+	// 原生「正在应用配置更改… Ns」遮罩。
+	//
+	// 做法：拦下按钮，先「只保存」（去掉 cbi.apply 字段，服务端只写暂存区），
+	// 再调用 ui.changes.apply() —— 这就是 LuCI 自己的遮罩，
+	// 任何主题下都一样，不需要我们画任何遮罩。
+	// ============================================================
+	function zjkjuHookSaveApply() {
+		var btn = document.querySelector('form input[name="cbi.apply"], form button[name="cbi.apply"]');
+		if (!btn || btn.__zjkjuHooked) return;
+		btn.__zjkjuHooked = true;
+
+		btn.addEventListener('click', function(ev) {
+			// 环境不支持就退回普通提交
+			if (typeof ui === 'undefined' || !ui.changes || typeof ui.changes.apply !== 'function') return;
+
+			var form = btn.form || btn.closest('form');
+			if (!form) return;
+
+			ev.preventDefault();
+			btn.disabled = true;
+
+			var data = new FormData(form);
+			data.delete('cbi.apply');
+
+			var url = form.getAttribute('action') || window.location.pathname;
+
+			fetch(url, {
+				method: 'POST',
+				body: data,
+				credentials: 'same-origin'
+			}).then(function(r) {
+				if (!r.ok) throw new Error('HTTP ' + r.status);
+				// 此时改动已在 /tmp/.uci 暂存区，交给原生遮罩去应用
+				return ui.changes.apply();
+			}).then(function() {
+				window.location.reload();
+			}).catch(function() {
+				btn.disabled = false;
+				// 兜底：走原来的表单提交，保证一定能保存
+				var hidden = document.createElement('input');
+				hidden.type = 'hidden';
+				hidden.name = 'cbi.apply';
+				hidden.value = '1';
+				form.appendChild(hidden);
+				form.submit();
+			});
+		});
+	}
+
+	if (document.readyState === 'loading') {
+		document.addEventListener('DOMContentLoaded', zjkjuHookSaveApply);
+	} else {
+		zjkjuHookSaveApply();
+	}
 })();
 </script>
