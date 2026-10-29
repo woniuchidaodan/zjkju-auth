@@ -118,26 +118,6 @@ log_msg() {
     fi
 }
 
-# 启动记录去重：5 分钟内重复启动不再写文件日志。
-# 原因：每次在 LuCI 保存配置都会触发 procd reload → 服务重启，
-# 如果每次都写文件，"wrapper started" 会把日志面板刷满。
-# syslog 仍然每次都记，方便用 logread 排查重启。
-log_start_once() {
-    local msg="$1" stamp="$STATE_DIR/last-start" now prev
-    now=$(date +%s 2>/dev/null); [ -z "$now" ] && now=0
-    prev=0
-    [ -f "$stamp" ] && prev=$(cat "$stamp" 2>/dev/null)
-    [ -z "$prev" ] && prev=0
-
-    if [ "$now" -gt 0 ] && [ "$prev" -gt 0 ] && [ $((now - prev)) -lt 300 ] 2>/dev/null; then
-        logger -t zjkju-auth "$msg"
-        return 0
-    fi
-
-    echo "$now" > "$stamp" 2>/dev/null
-    log_msg "$msg"
-}
-
 trap '_force_flush_buffer; exit 0' TERM INT
 
 set_status() { echo "$1" > "$STATUS_FILE"; }
@@ -221,7 +201,7 @@ do_ntp_sync_with_flush() {
 }
 
 # 启动不再阻塞对时：主循环里的 try_ntp 会完成同步并按 offset 回填日志时间
-log_start_once "wrapper started"
+log_msg "wrapper started"
 
 normalize_interval() {
     local v="$1"

@@ -131,15 +131,7 @@ if clean == "" then clean = "1.0.5-r1" end
 				return;
 			}
 
-			// 90 秒兜底：后台脚本没起来时不让按钮无限转圈
-			var startedAt = Date.now();
 			var timer = setInterval(function() {
-				if (Date.now() - startedAt > 90000) {
-					clearInterval(timer);
-					alert('<%:更新超时，后台任务未在 90 秒内完成，请重试或手动下载%>');
-					unlock('<%:立即更新%>');
-					return;
-				}
 				XHR.get(upStatusUrl + '?t=' + Math.floor(Date.now() / 1000), null, function(y) {
 					var text = (y && y.status === 200) ? y.responseText : '';
 					var parts = text.split('|');

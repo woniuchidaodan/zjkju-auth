@@ -33,11 +33,11 @@ stop_service() {
 # 注意：这里不注册 procd_add_reload_trigger。
 #
 # 原因：wrapper 的主循环每轮都会重新读取配置（config_load），
-# 学号 / 密码 / 检测间隔改了之后它自己就会用新值，不需要重启。
-# 如果注册触发器，每次在 LuCI 保存配置都会重启服务，
+# 学号 / 密码 / 服务类型 / 手动地址改了之后它自己就会用新值，
+# 不需要重启。如果注册触发器，每次在 LuCI 保存配置都会重启服务，
 # 日志里就会不断出现 "wrapper started"。
 #
-# 启停改由 model/cbi 的 on_after_commit 按"当前进程状态"决定：
+# 启停改由 model/cbi 的 on_after_commit 按「当前进程状态」决定：
 #   未启用 → 启用   ：启动
 #   启用 → 未启用   ：停止
 #   状态没变        ：不动

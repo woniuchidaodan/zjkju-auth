@@ -43,13 +43,6 @@ rm -f /tmp/zjkju_auth_update.*
 rm -f /tmp/zjkju_update_status
 mkdir -p /var/log/zjkju-auth
 
-# 版本号缓存：避免 LuCI 每 5 秒轮询 /status 时都去跑一次 opkg
-if command -v opkg >/dev/null 2>&1; then
-    opkg status luci-app-zjkju-auth 2>/dev/null | grep '^Version:' | awk '{print $2}' > /tmp/zjkju-auth-version
-elif command -v apk >/dev/null 2>&1; then
-    apk info -v luci-app-zjkju-auth 2>/dev/null | head -n1 | cut -d'-' -f2- > /tmp/zjkju-auth-version
-fi
-
 rm -f /tmp/luci-indexcache.*
 rm -rf /tmp/luci-modulecache/
 /etc/init.d/rpcd reload 2>/dev/null
@@ -84,19 +77,18 @@ for p in $$(ps w 2>/dev/null | grep -E '[z]jkju-auth-wrapper|[r]uijie' | awk '{p
 done
 
 # ========== 2. 配置、启动项与可执行文件 ==========
-# 这些本来就由包管理器删除，这里再兜底一次，
-# 防止包数据库损坏或旧版本残留导致删不干净
 rm -f /etc/config/zjkju-auth
 rm -f /etc/init.d/zjkju-auth
 rm -f /etc/uci-defaults/80_zjkju-auth
 rm -f /usr/bin/zjkju-auth-wrapper.sh
+rm -f /usr/bin/zjkju-auth-uninstall.sh
 rm -f /usr/bin/ruijie
 
 # ========== 2b. 运行数据 ==========
 rm -rf /var/log/zjkju-auth
 rm -f /var/log/zjkju-auth.log
 
-# ========== 3. /tmp 残留（覆盖 v1.0.0 ~ r11 各版本）==========
+# ========== 3. /tmp 残留 ==========
 rm -f /tmp/zjkju-auth-status
 rm -f /tmp/zjkju-auth-last-url
 rm -f /tmp/zjkju-auth-online-printed
@@ -104,17 +96,16 @@ rm -f /tmp/zjkju-auth-out.log
 rm -f /tmp/zjkju_do_update.sh
 rm -f /tmp/zjkju_auth_update.*
 rm -f /tmp/zjkju_update_status
-rm -f /tmp/zjkju-auth-version
+rm -f /tmp/zjkju-uninstall-run.sh
 rm -f /tmp/luci-app-zjkju-auth_*.ipk
 rm -f /tmp/luci-app-zjkju-auth_*.apk
 
-# ========== 4. 旧版本遗留的界面文件（升级路径可能留下）==========
+# ========== 4. 旧版本遗留的界面文件 ==========
 rm -rf /usr/lib/lua/luci/model/cbi/zjkju-auth
 rm -rf /usr/lib/lua/luci/view/zjkju-auth
 rm -f  /usr/lib/lua/luci/controller/zjkju-auth.lua
 rm -f  /usr/share/luci/menu.d/luci-app-zjkju-auth.json
 rm -f  /usr/share/rpcd/acl.d/luci-app-zjkju-auth.json
-# r10 的实验界面（JS 视图）
 rm -rf /www/luci-static/resources/view/zjkju-auth
 
 # ========== 5. LuCI 缓存与包管理器记录 ==========
@@ -122,7 +113,7 @@ rm -rf /usr/lib/opkg/info/luci-app-zjkju-auth.*
 rm -f  /tmp/luci-indexcache.*
 rm -rf /tmp/luci-modulecache/
 
-# ========== 6. 重载前端服务，菜单立即消失 ==========
+# ========== 6. 重载前端服务 ==========
 /etc/init.d/rpcd reload 2>/dev/null
 /etc/init.d/uhttpd reload 2>/dev/null
 
@@ -132,6 +123,7 @@ endef
 define Package/luci-app-zjkju-auth/install
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) ./root/usr/bin/zjkju-auth-wrapper.sh $(1)/usr/bin/zjkju-auth-wrapper.sh
+	$(INSTALL_BIN) ./root/usr/bin/zjkju-auth-uninstall.sh $(1)/usr/bin/zjkju-auth-uninstall.sh
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./root/etc/config/zjkju-auth $(1)/etc/config/zjkju-auth
 	$(INSTALL_DIR) $(1)/etc/init.d

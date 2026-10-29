@@ -87,10 +87,12 @@ o = s:taboption("other", DummyValue, "_version_check", translate("版本更新")
 o.rawhtml = true
 o.default = [=[<div style="margin-top:4px;">]=] .. [=[
 	<div style="margin-bottom:6px;">当前版本：<code>]=] .. PKG_VERSION .. [=[</code></div>
+	<span style="display:inline-block;">
 	<button type="button" class="zjkju-btn" style="position:relative;outline:none;display:inline-flex!important;width:auto!important;height:auto!important;min-width:0!important;min-height:0!important;max-width:100%!important;padding:8px 18px!important;margin:0!important;line-height:1.5!important;box-sizing:border-box!important;" onclick="zjkjuCheckUpdate()">
 		检查更新
 		<span id="zjkju-red-dot" style="display:none;position:absolute;top:-4px;right:-4px;width:10px;height:10px;background:#e74c3c;border-radius:50%;box-shadow:0 0 0 2px #fff;"></span>
 	</button>
+	</span>
 	<span id="zjkju-update-msg" style="margin-left:10px;"></span>
 </div>]=]
 
@@ -105,11 +107,10 @@ sec2.template = "zjkju-auth/update"
 -- ============================================================
 -- 保存后的处理：按「当前进程状态」决定是否启停，不做无谓的重启。
 --
--- 为什么不在每次保存后重启：
---   wrapper 主循环每轮都会 config_load，重新读取
---   用户名 / 密码 / 服务类型 / 手动认证地址，
---   这些字段改完下一轮（默认 10 秒内）就自动生效，不需要重启。
---   界面里只有「启用」这一项需要真正启停服务。
+-- wrapper 主循环每轮都会 config_load，重新读取
+-- 用户名 / 密码 / 服务类型 / 手动认证地址，
+-- 这些字段改完下一轮（默认 10 秒内）就自动生效，不需要重启。
+-- 界面里只有「启用」这一项需要真正启停服务。
 --
 -- 所以这里做的是幂等判断：
 --   启用 且 没在跑  → 启动
@@ -140,19 +141,16 @@ function m.on_after_commit(self)
 			-- 只有这一条分支需要先把配置落盘：
 			-- start_service 读的是 /etc/config/zjkju-auth，
 			-- 不落盘会读到旧值（历史上"要点两次"就是这个问题）。
-			-- 其它分支不提交，保持前端 ui.changes 的应用流程不变。
 			self.uci:commit("zjkju-auth")
 			sys.call("uci commit zjkju-auth")
 			sys.call("/etc/init.d/zjkju-auth start >/dev/null 2>&1")
 			sys.call("logger -t zjkju-auth '配置已保存：启用，启动服务'")
 		else
-			-- 已启用且运行中：不重启，只留一条痕迹
 			sys.call("logger -t zjkju-auth '配置已保存：已启用且运行中，不重启'")
 			sys.call("sleep 1")
 		end
 	else
-		-- 禁用：无论进程在不在，都要移除自启软链，
-		-- 否则 /etc/rc.d/S99zjkju-auth 会残留（开机虽被 enabled 判断挡住，但不干净）
+		-- 禁用：无论进程在不在，都要移除自启软链
 		sys.call("/etc/init.d/zjkju-auth disable >/dev/null 2>&1")
 
 		if running then
