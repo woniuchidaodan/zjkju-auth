@@ -30,20 +30,48 @@ stop_service() {
 	logger -t zjkju-auth "stop_service: 收到停止请求"
 }
 
-# 注意：这里不注册 procd_add_reload_trigger。
+# 配置被提交并 apply 之后，procd 会调用 reload_service。
 #
-# 原因：wrapper 的主循环每轮都会重新读取配置（config_load），
-# 学号 / 密码 / 服务类型 / 手动地址改了之后它自己就会用新值，
-# 不需要重启。如果注册触发器，每次在 LuCI 保存配置都会重启服务，
-# 日志里就会不断出现 "wrapper started"。
+# 这里注册触发器是必要的：
+#   LuCI 前端的 ui.changes.apply() 会等到本次 apply 请求返回才收起
+#   「正在应用配置更改… Ns」遮罩。触发器让 apply 走一遍 reload_service，
+#   reload_service 里有一个 2 秒的观察窗口，遮罩因此能被看清。
 #
-# 启停改由 model/cbi 的 on_after_commit 按「当前进程状态」决定：
-#   未启用 → 启用   ：启动
-#   启用 → 未启用   ：停止
-#   状态没变        ：不动
+# 但 reload_service 内部做的是「条件启停」：
+#   已启用 + 在跑   → 不重启（wrapper 每轮会重读配置）
+#   已启用 + 没跑   → 启动
+#   未启用          → 停止并移除自启
+service_triggers() {
+	procd_add_reload_trigger "zjkju-auth"
+}
+
+# 判断 wrapper 是否在跑（procd 的 ubus 状态最可靠）
+_zjkju_running() {
+	ubus call service list '{"name":"zjkju-auth"}' 2>/dev/null | grep -q '"running": true'
+}
 
 reload_service() {
-	logger -t zjkju-auth "reload_service: 配置变更，重启服务"
-	stop
-	start
+	# 观察窗口：让前端原生读秒遮罩停留 2 秒，任何主题下都看得见
+	sleep 2
+
+	config_load zjkju-auth
+	config_get_bool enabled main enabled 0
+
+	if [ "$enabled" = "1" ]; then
+		[ -f /etc/rc.d/S99zjkju-auth ] || /etc/init.d/zjkju-auth enable >/dev/null 2>&1
+		if _zjkju_running; then
+			logger -t zjkju-auth "reload_service: 已启用且运行中，不重启"
+		else
+			logger -t zjkju-auth "reload_service: 启用但未运行，启动"
+			/etc/init.d/zjkju-auth start >/dev/null 2>&1
+		fi
+	else
+		/etc/init.d/zjkju-auth disable >/dev/null 2>&1
+		if _zjkju_running; then
+			logger -t zjkju-auth "reload_service: 已禁用，停止"
+			/etc/init.d/zjkju-auth stop >/dev/null 2>&1
+		else
+			logger -t zjkju-auth "reload_service: 已禁用且未运行，仅移除自启"
+		fi
+	fi
 }
