@@ -11,18 +11,5 @@
 				"luci-app-zjkju-auth"
 			]
 		}
-	},
-	"admin/services/zjkju-auth/new": {
-		"title": "新版界面（实验）",
-		"order": 61,
-		"action": {
-			"type": "view",
-			"path": "zjkju-auth/main"
-		},
-		"depends": {
-			"acl": [
-				"luci-app-zjkju-auth"
-			]
-		}
 	}
 }

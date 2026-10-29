@@ -3,8 +3,10 @@ module("luci.controller.zjkju-auth", package.seeall)
 local STATE_DIR   = "/var/log/zjkju-auth"
 local LOG_FILE    = STATE_DIR .. "/auth.log"
 local STATUS_FILE = STATE_DIR .. "/status"
+-- 版本号缓存：/status 每 5 秒被轮询一次，不能每次都跑 opkg
+local VERSION_CACHE = "/tmp/zjkju-auth-version"
 
-local FALLBACK_VERSION = "1.0.4-r10"
+local FALLBACK_VERSION = "1.0.5-r1"
 
 local GITHUB_PROXIES = {
 	"",
@@ -131,7 +133,7 @@ function action_status()
 	http.prepare_content("application/json; charset=utf-8")
 	http.write_json({
 		enabled = enabled, running = running, online = (status == "online"),
-		status = status, version = get_installed_version(), ts = os.time()
+		status = status, version = cached_version(), ts = os.time()
 	})
 end
 
@@ -145,9 +147,26 @@ function get_installed_version()
 	local clean_v = v:match("([0-9%.]+%-r[0-9]+%a*)")
 		or v:match("([0-9%.]+%-[0-9]+)")
 		or v:match("([0-9%.]+)") or ""
-	-- opkg 的 Version 形如 "1.0.4-8"，统一规范成 "1.0.4-r8" 才能和 tag 比较
+	-- opkg 的 Version 形如 "1.0.5-1"，统一规范成 "1.0.5-r1" 才能和 tag 比较
 	clean_v = clean_v:gsub("%-(%d+)$", "-r%1")
 	return (clean_v ~= "" and clean_v) or FALLBACK_VERSION
+end
+
+-- 带缓存的版本号读取：
+--   优先读 /tmp/zjkju-auth-version（postinst 安装时写入），
+--   缺失时才真的去跑 opkg，并把结果回写，避免每 5 秒 spawn 一次 opkg。
+local function cached_version()
+	local fs = require "nixio.fs"
+	local v = ""
+	if fs.access(VERSION_CACHE) then
+		v = (fs.readfile(VERSION_CACHE) or ""):gsub("%s+", "")
+	end
+	if v ~= "" then
+		return v
+	end
+	v = get_installed_version()
+	pcall(function() fs.writefile(VERSION_CACHE, v) end)
+	return v
 end
 
 local function compare_version(v1, v2)
@@ -354,7 +373,7 @@ end
 
 function action_check_update()
 	local http = require "luci.http"
-	local current = get_installed_version()
+	local current = cached_version()
 	local result = { current_version = current, has_update = false }
 
 	local ext = get_pkg_ext()
@@ -497,9 +516,21 @@ for P in $PROXIES; do
             set_status "3|安装中|100"
             if command -v opkg >/dev/null 2>&1; then
                 opkg install "$TARGET" >/dev/null 2>&1
+                INSTALL_RC=$?
             else
                 apk add --allow-untrusted "$TARGET" >/dev/null 2>&1
+                INSTALL_RC=$?
             fi
+
+            # 安装命令的退出码必须检查：
+            # 依赖缺失、空间不足、包损坏都会返回非 0。
+            # 以前忽略掉，会误报"安装完成"然后重启到旧版本。
+            if [ "$INSTALL_RC" != "0" ]; then
+                rm -f "$TARGET" "$0"
+                set_status "-1|安装失败（错误码 $INSTALL_RC），请检查空间与依赖|0"
+                exit 1
+            fi
+
             rm -f "$TARGET" "$0"
             /etc/init.d/zjkju-auth restart >/dev/null 2>&1
             set_status "4|安装完成|100"
@@ -518,6 +549,11 @@ exit 1
 	end
 
 	fs.writefile(bg_script, script_content)
+	-- 写盘失败就直接报错，否则前端会一直轮询「准备中」等不到结果
+	if not fs.access(bg_script) then
+		http.write_json({ success = false, error = "无法写入更新脚本，请检查 /tmp 是否可写" })
+		return
+	end
 	sys.call("chmod +x " .. bg_script)
 	sys.call("(sleep 1; " .. bg_script .. ") >/dev/null 2>&1 &")
 	http.write_json({ success = true })

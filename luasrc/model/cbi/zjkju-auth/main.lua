@@ -4,7 +4,7 @@ local sys       = require "luci.sys"
 
 local m, s, o
 
-local PKG_VERSION = "1.0.4-r10"
+local PKG_VERSION = "1.0.5-r1"
 do
 	local v = sys.exec("opkg status luci-app-zjkju-auth 2>/dev/null | grep '^Version:' | awk '{print $2}'")
 	if not v or v == "" then
@@ -14,7 +14,7 @@ do
 	local clean_v = v:match("([0-9%.]+%-r[0-9]+%a*)")
 		or v:match("([0-9%.]+%-[0-9]+)")
 		or v:match("([0-9%.]+)") or ""
-	-- opkg 的 Version 形如 "1.0.4-10"，统一规范成 "1.0.4-r10" 才能和 tag 比较
+	-- opkg 的 Version 形如 "1.0.5-1"，统一规范成 "1.0.5-r1" 才能和 tag 比较
 	clean_v = clean_v:gsub("%-(%d+)$", "-r%1")
 	if clean_v ~= "" then PKG_VERSION = clean_v end
 end
@@ -87,12 +87,10 @@ o = s:taboption("other", DummyValue, "_version_check", translate("版本更新")
 o.rawhtml = true
 o.default = [=[<div style="margin-top:4px;">]=] .. [=[
 	<div style="margin-bottom:6px;">当前版本：<code>]=] .. PKG_VERSION .. [=[</code></div>
-	<span style="display:inline-block;">
-	<button type="button" class="cbi-button cbi-button-action" style="position:relative;outline:none;display:inline-block!important;width:auto!important;min-width:0!important;max-width:100%!important;height:auto!important;min-height:0!important;line-height:1.5!important;padding:6px 16px!important;margin:0!important;font-size:13px!important;box-sizing:border-box!important;" onclick="zjkjuCheckUpdate()">
+	<button type="button" class="zjkju-btn" style="position:relative;outline:none;display:inline-flex!important;width:auto!important;height:auto!important;min-width:0!important;min-height:0!important;max-width:100%!important;padding:8px 18px!important;margin:0!important;line-height:1.5!important;box-sizing:border-box!important;" onclick="zjkjuCheckUpdate()">
 		检查更新
 		<span id="zjkju-red-dot" style="display:none;position:absolute;top:-4px;right:-4px;width:10px;height:10px;background:#e74c3c;border-radius:50%;box-shadow:0 0 0 2px #fff;"></span>
 	</button>
-	</span>
 	<span id="zjkju-update-msg" style="margin-left:10px;"></span>
 </div>]=]
 
@@ -105,21 +103,66 @@ local sec2 = m:section(SimpleSection)
 sec2.template = "zjkju-auth/update"
 
 -- ============================================================
--- 保存后不做任何提交和启停。
+-- 保存后的处理：按「当前进程状态」决定是否启停，不做无谓的重启。
 --
--- 为什么：LuCI 的「保存并应用」在我们要的这条流程里，是由前端
--- ui.changes.apply() 负责把暂存区（/tmp/.uci）里的改动提交并应用，
--- 同时显示原生倒计时「正在应用配置更改… Ns」。
--- 如果这里提前 self.uci:commit()，暂存区会被清空，
--- ui.changes.apply() 就找不到改动，只会提示「没有待应用的更改」。
+-- 为什么不在每次保存后重启：
+--   wrapper 主循环每轮都会 config_load，重新读取
+--   用户名 / 密码 / 服务类型 / 手动认证地址，
+--   这些字段改完下一轮（默认 10 秒内）就自动生效，不需要重启。
+--   界面里只有「启用」这一项需要真正启停服务。
 --
--- 服务重启由 /etc/init.d/zjkju-auth 的 procd_add_reload_trigger("zjkju-auth")
--- 在配置提交后自动触发，不需要在这里手动 stop/start。
+-- 所以这里做的是幂等判断：
+--   启用 且 没在跑  → 启动
+--   未启用 且 在跑  → 停止
+--   其它情况       → 什么都不做
 -- ============================================================
+local function is_running()
+	local svc = sys.exec("ubus call service list '{\"name\":\"zjkju-auth\"}' 2>/dev/null")
+	if svc and svc:find('"running": true', 1, true) then
+		return true
+	end
+	local pline = sys.exec("ps 2>/dev/null | grep '[z]jkju-auth-wrapper' | head -n1")
+	return pline ~= nil and pline:gsub("%s+", "") ~= ""
+end
+
 function m.on_after_commit(self)
 	local enabled = self.uci:get("zjkju-auth", "main", "enabled")
-	sys.call("logger -t zjkju-auth '保存已提交，等 procd 触发器重启服务 (enabled=["
-		.. tostring(enabled) .. "])'")
+	local is_on = (enabled == "1" or enabled == "on" or enabled == "true"
+		or enabled == "yes" or enabled == "enabled")
+
+	local running = is_running()
+
+	if is_on then
+		-- 启用：确保自启软链存在（取消再勾选后可能被 disable 删掉）
+		sys.call("/etc/init.d/zjkju-auth enable >/dev/null 2>&1")
+
+		if not running then
+			-- 只有这一条分支需要先把配置落盘：
+			-- start_service 读的是 /etc/config/zjkju-auth，
+			-- 不落盘会读到旧值（历史上"要点两次"就是这个问题）。
+			-- 其它分支不提交，保持前端 ui.changes 的应用流程不变。
+			self.uci:commit("zjkju-auth")
+			sys.call("uci commit zjkju-auth")
+			sys.call("/etc/init.d/zjkju-auth start >/dev/null 2>&1")
+			sys.call("logger -t zjkju-auth '配置已保存：启用，启动服务'")
+		else
+			-- 已启用且运行中：不重启，只留一条痕迹
+			sys.call("logger -t zjkju-auth '配置已保存：已启用且运行中，不重启'")
+			sys.call("sleep 1")
+		end
+	else
+		-- 禁用：无论进程在不在，都要移除自启软链，
+		-- 否则 /etc/rc.d/S99zjkju-auth 会残留（开机虽被 enabled 判断挡住，但不干净）
+		sys.call("/etc/init.d/zjkju-auth disable >/dev/null 2>&1")
+
+		if running then
+			sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
+			sys.call("logger -t zjkju-auth '配置已保存：禁用，停止服务'")
+		else
+			sys.call("logger -t zjkju-auth '配置已保存：已禁用且未运行，仅移除自启'")
+			sys.call("sleep 1")
+		end
+	end
 end
 
 return m
