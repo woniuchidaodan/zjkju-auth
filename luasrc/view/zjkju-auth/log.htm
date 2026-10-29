@@ -223,64 +223,126 @@ end
 	setInterval(zjkjuStatusRefresh, 5000);
 
 	// ============================================================
-	// 「保存并应用」拦截
+	// 让「保存并应用」走 ui.changes.apply()（原生读秒遮罩）
 	//
-	// 为什么需要：传统 CBI 的「保存并应用」是普通表单 POST，
-	// 服务端在 cbi.lua 的 Map.apply() 里就把改动 commit 掉了，
-	// 前端的 ui.changes.apply() 找不到待应用项，所以永远不显示
-	// 原生「正在应用配置更改… Ns」遮罩。
+	// 难点：不同主题对这个按钮的渲染方式不一样，必须都认：
+	//   ① 经典：<input type="submit" name="cbi.apply">
+	//   ② 某些：<button name="cbi.apply">
+	//   ③ bootstrap：<div class="cbi-dropdown cbi-button-apply">
+	//                里面有 <li data-value="0">保存并应用</li>
+	//                      和 <li data-value="1">强制应用</li>
 	//
-	// 做法：拦下按钮，先「只保存」（去掉 cbi.apply 字段，服务端只写暂存区），
-	// 再调用 ui.changes.apply() —— 这就是 LuCI 自己的遮罩，
-	// 任何主题下都一样，不需要我们画任何遮罩。
+	// 做法：拦下点击（capture 阶段，先于主题自己的处理），
+	// 先「只保存」（去掉 cbi.apply），再调 ui.changes.apply()。
 	// ============================================================
-	function zjkjuHookSaveApply() {
-		var btn = document.querySelector('form input[name="cbi.apply"], form button[name="cbi.apply"]');
-		if (!btn || btn.__zjkjuHooked) return;
-		btn.__zjkjuHooked = true;
+	function zjkjuSaveApply() {
+		var form = document.querySelector('form.cbi-map, .cbi-map form, form');
+		if (!form || form.__zjkjuHooked) {
+			form = document.querySelector('form');
+			if (!form || form.__zjkjuHooked) return;
+		}
+		form.__zjkjuHooked = true;
 
-		btn.addEventListener('click', function(ev) {
-			// 环境不支持就退回普通提交
-			if (typeof ui === 'undefined' || !ui.changes || typeof ui.changes.apply !== 'function') return;
+		var busy = false;
 
-			var form = btn.form || btn.closest('form');
-			if (!form) return;
+		function hiddenApply(v) {
+			var h = document.createElement('input');
+			h.type = 'hidden';
+			h.name = 'cbi.apply';
+			h.value = (v == null ? '1' : String(v));
+			return h;
+		}
 
-			ev.preventDefault();
-			btn.disabled = true;
+		function nativeSubmit(force) {
+			form.appendChild(hiddenApply(force ? '1' : '0'));
+			form.submit();
+		}
 
+		function run(force) {
+			if (busy) return;
+
+			// 环境不支持就退回原生
+			if (typeof ui === 'undefined' || !ui.changes || typeof ui.changes.apply !== 'function') {
+				nativeSubmit(force);
+				return;
+			}
+
+			busy = true;
+
+			// 只保存：去掉 cbi.apply，服务端只写暂存区
 			var data = new FormData(form);
 			data.delete('cbi.apply');
 
-			var url = form.getAttribute('action') || window.location.pathname;
-
-			fetch(url, {
+			fetch(window.location.pathname, {
 				method: 'POST',
 				body: data,
 				credentials: 'same-origin'
 			}).then(function(r) {
 				if (!r.ok) throw new Error('HTTP ' + r.status);
-				// 此时改动已在 /tmp/.uci 暂存区，交给原生遮罩去应用
-				return ui.changes.apply();
+				return ui.changes.apply();     // ★ 原生遮罩 ★
 			}).then(function() {
 				window.location.reload();
 			}).catch(function() {
-				btn.disabled = false;
-				// 兜底：走原来的表单提交，保证一定能保存
-				var hidden = document.createElement('input');
-				hidden.type = 'hidden';
-				hidden.name = 'cbi.apply';
-				hidden.value = '1';
-				form.appendChild(hidden);
-				form.submit();
+				busy = false;
+				nativeSubmit(force);           // 兜底
 			});
+		}
+
+		// ---------- 形态 ③：主题把按钮改成了 apply 下拉 ----------
+		// bootstrap 等主题会把「保存并应用」渲染成：
+		//   <div class="cbi-dropdown cbi-button-apply">
+		//     <li data-value="0">保存并应用</li><li data-value="1">强制应用</li>
+		//   </div>
+		// 1.0.4 的页脚本来是三个平按钮，没有下拉。
+		// 所以这里把下拉藏掉，原地换成一个外观一致的平按钮，
+		// 点击走 JS（只保存 + ui.changes.apply()），一步还原 1.0.4 的布局。
+		var dd = form.querySelector('.cbi-page-actions .cbi-dropdown.cbi-button-apply')
+			|| form.querySelector('.cbi-dropdown.cbi-button-apply')
+			|| document.querySelector('.cbi-dropdown.cbi-button-apply');
+
+		if (dd) {
+			var flat = document.createElement('button');
+			flat.type = 'button';
+			flat.className = 'cbi-button cbi-button-apply';
+			flat.textContent = '保存并应用';
+			flat.addEventListener('click', function() { run(false); });
+
+			dd.parentNode.insertBefore(flat, dd);
+			dd.style.display = 'none';      // 保留元素，避免 cbi.js 引用报错
+			return;
+		}
+
+		// ---------- 形态 ①②：经典按钮 ----------
+		var native = form.querySelector('input[name="cbi.apply"], button[name="cbi.apply"]');
+		if (!native) return;
+
+		var jsBtn;
+		if (native.tagName === 'INPUT') {
+			jsBtn = document.createElement('input');
+			jsBtn.type = 'button';
+			jsBtn.value = native.value;
+		} else {
+			jsBtn = document.createElement('button');
+			jsBtn.type = 'button';
+			jsBtn.textContent = native.textContent.trim();
+		}
+		jsBtn.className = native.className;
+		jsBtn.addEventListener('click', function() { run(false); });
+
+		native.parentNode.insertBefore(jsBtn, native);
+		native.style.display = 'none';
+
+		// 回车提交也走 JS
+		form.addEventListener('submit', function(ev) {
+			ev.preventDefault();
+			run(false);
 		});
 	}
 
 	if (document.readyState === 'loading') {
-		document.addEventListener('DOMContentLoaded', zjkjuHookSaveApply);
+		document.addEventListener('DOMContentLoaded', zjkjuSaveApply);
 	} else {
-		zjkjuHookSaveApply();
+		zjkjuSaveApply();
 	}
 })();
 </script>
