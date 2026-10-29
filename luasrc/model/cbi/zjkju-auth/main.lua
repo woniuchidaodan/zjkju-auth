@@ -105,62 +105,21 @@ local sec2 = m:section(SimpleSection)
 sec2.template = "zjkju-auth/update"
 
 -- ============================================================
--- 保存后的处理：按「当前进程状态」决定是否启停，不做无谓的重启。
+-- 保存后的处理
 --
--- wrapper 主循环每轮都会 config_load，重新读取
--- 用户名 / 密码 / 服务类型 / 手动认证地址，
--- 这些字段改完下一轮（默认 10 秒内）就自动生效，不需要重启。
--- 界面里只有「启用」这一项需要真正启停服务。
+-- 正常路径（浏览器 JS 可用）：
+--   log.htm 里的拦截器会先「只保存」再调 ui.changes.apply()，
+--   由 procd 触发器走 reload_service，启停判断在 init.d 里做。
+--   这条路径不会进到这里。
 --
--- 所以这里做的是幂等判断：
---   启用 且 没在跑  → 启动
---   未启用 且 在跑  → 停止
---   其它情况       → 什么都不做
+-- 兜底路径（JS 不可用 / fetch 失败）：
+--   表单带 cbi.apply 提交，服务端提交配置后在这里调 reload，
+--   reload_service 同样会做条件启停。
 -- ============================================================
-local function is_running()
-	local svc = sys.exec("ubus call service list '{\"name\":\"zjkju-auth\"}' 2>/dev/null")
-	if svc and svc:find('"running": true', 1, true) then
-		return true
-	end
-	local pline = sys.exec("ps 2>/dev/null | grep '[z]jkju-auth-wrapper' | head -n1")
-	return pline ~= nil and pline:gsub("%s+", "") ~= ""
-end
-
 function m.on_after_commit(self)
-	local enabled = self.uci:get("zjkju-auth", "main", "enabled")
-	local is_on = (enabled == "1" or enabled == "on" or enabled == "true"
-		or enabled == "yes" or enabled == "enabled")
-
-	local running = is_running()
-
-	if is_on then
-		-- 启用：确保自启软链存在（取消再勾选后可能被 disable 删掉）
-		sys.call("/etc/init.d/zjkju-auth enable >/dev/null 2>&1")
-
-		if not running then
-			-- 只有这一条分支需要先把配置落盘：
-			-- start_service 读的是 /etc/config/zjkju-auth，
-			-- 不落盘会读到旧值（历史上"要点两次"就是这个问题）。
-			self.uci:commit("zjkju-auth")
-			sys.call("uci commit zjkju-auth")
-			sys.call("/etc/init.d/zjkju-auth start >/dev/null 2>&1")
-			sys.call("logger -t zjkju-auth '配置已保存：启用，启动服务'")
-		else
-			sys.call("logger -t zjkju-auth '配置已保存：已启用且运行中，不重启'")
-			sys.call("sleep 1")
-		end
-	else
-		-- 禁用：无论进程在不在，都要移除自启软链
-		sys.call("/etc/init.d/zjkju-auth disable >/dev/null 2>&1")
-
-		if running then
-			sys.call("/etc/init.d/zjkju-auth stop >/dev/null 2>&1")
-			sys.call("logger -t zjkju-auth '配置已保存：禁用，停止服务'")
-		else
-			sys.call("logger -t zjkju-auth '配置已保存：已禁用且未运行，仅移除自启'")
-			sys.call("sleep 1")
-		end
-	end
+	self.uci:commit("zjkju-auth")
+	sys.call("uci commit zjkju-auth")
+	sys.call("/etc/init.d/zjkju-auth reload >/dev/null 2>&1")
 end
 
 return m
