@@ -484,14 +484,12 @@ AUTH_SERVER="http://你们学校的认证服务器IP"
 
 本项目采用 **GNU General Public License v3.0**（GPL-3.0）许可证，详见 [LICENSE](./LICENSE) 文件。
 
-### 上游来源声明
-
-- 核心认证逻辑来自 [Micro-Cnhua/Ruijie_Porta_Auth](https://github.com/Micro-Cnhua/Ruijie_Porta_Auth)
-- 上游参考了 [Turris-Babel/school_ruijie](https://github.com/Turris-Babel/school_ruijie)
-- 上游未声明许可证，本项目自主选择 GPL-3.0，并保留上游版权声明
-
 ## ⚠️ 免责声明
 
 - 本项目仅供学习交流使用，请勿用于商业用途
 - 使用本工具可能违反学校网络管理规定，请自行承担风险
 - 密码保存在路由器 `/etc/config/zjkju-auth` 中（权限 600，仅 root 可读），请确保路由器安全
+
+<p align="center">
+  <img width="356" height="95" alt="logo" src="https://github.com/user-attachments/assets/032c1dcc-4476-4171-8a3a-d2fb33adc8c4" />
+</p>
