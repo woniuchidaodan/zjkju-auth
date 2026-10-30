@@ -223,126 +223,167 @@ end
 	setInterval(zjkjuStatusRefresh, 5000);
 
 	// ============================================================
-	// 让「保存并应用」走 ui.changes.apply()（原生读秒遮罩）
+	// 让「保存并应用」走 LuCI 原生 ui.changes.apply()（读秒遮罩）
 	//
-	// 难点：不同主题对这个按钮的渲染方式不一样，必须都认：
-	//   ① 经典：<input type="submit" name="cbi.apply">
-	//   ② 某些：<button name="cbi.apply">
-	//   ③ bootstrap：<div class="cbi-dropdown cbi-button-apply">
-	//                里面有 <li data-value="0">保存并应用</li>
-	//                      和 <li data-value="1">强制应用</li>
+	// 背景（23.05 / 24.10 / 25.12 的 luci-compat 页脚完全一致）：
+	//   「保存并应用」= <input type="button" class="cbi-button-apply"
+	//                    onclick="cbi_submit(this, 'cbi.apply')">
+	//   它没有 name，也不是下拉；cbi_submit 只是塞一个隐藏 cbi.apply
+	//   再 form.submit()。服务端 cbi.lua 在同一个 POST 里就 commit 了，
+	//   前端 ui.changes.apply() 根本没有机会执行 —— 所以原生永远不读秒。
 	//
-	// 做法：拦下点击（capture 阶段，先于主题自己的处理），
-	// 先「只保存」（去掉 cbi.apply），再调 ui.changes.apply()。
+	// 做法（LuCI 自己/argon-config 也是这个套路）：
+	//   1) capture 阶段拦下点击，抢在页脚内联 onclick 之前；
+	//   2) FormData 去掉 cbi.apply 先 POST 一次，让服务端只写暂存区；
+	//   3) 用 L.require('ui') 载入 LuCI 原生 ui 模块，再调
+	//      ui.changes.apply(true) —— 原生遮罩、原生读秒、原生确认流程。
+	//
+	// 兼容形态：
+	//   经典页脚 .cbi-page-actions .cbi-button-apply（23.05~25.12+）
+	//   带 name="cbi.apply" 的 input / button（少数主题）
+	//   下拉 .cbi-dropdown.cbi-button-apply（JS 表单 / 定制主题）
 	// ============================================================
-	function zjkjuSaveApply() {
-		var form = document.querySelector('form.cbi-map, .cbi-map form, form');
-		if (!form || form.__zjkjuHooked) {
-			form = document.querySelector('form');
-			if (!form || form.__zjkjuHooked) return;
-		}
-		form.__zjkjuHooked = true;
+	function zjkjuInstallApplyMask() {
+		if (window.__zjkjuApplyMaskInstalled) return;
+		window.__zjkjuApplyMaskInstalled = true;
 
 		var busy = false;
 
-		function hiddenApply(v) {
+		function findForm(el) {
+			if (el && el.form) return el.form;
+			if (el && el.closest) {
+				var f = el.closest('form');
+				if (f) return f;
+			}
+			return document.querySelector('form');
+		}
+
+		function hiddenApply(value) {
 			var h = document.createElement('input');
 			h.type = 'hidden';
 			h.name = 'cbi.apply';
-			h.value = (v == null ? '1' : String(v));
+			h.value = (value == null ? '1' : String(value));
 			return h;
 		}
 
-		function nativeSubmit(force) {
-			form.appendChild(hiddenApply(force ? '1' : '0'));
-			form.submit();
+		function nativeSubmit(form, force) {
+			if (!form) return;
+			var h = hiddenApply(force ? '1' : '0');
+			form.appendChild(h);
+			try { form.submit(); } finally { /* 页面即将卸载 */ }
 		}
 
-		function run(force) {
+		// 页面校验（cbi.js 的 datatype 校验）绕不过去，必须手动跑一遍
+		function validate(form) {
+			if (typeof window.cbi_validate_form !== 'function') return true;
+			var msg = null;
+			var onsubmit = form.getAttribute('onsubmit') || '';
+			var m = /cbi_validate_form\s*\(\s*this\s*,\s*(['"])((?:\\.|(?!\1).)*)\1/.exec(onsubmit);
+			if (m) msg = m[2].replace(/\\(['"\\])/g, '$1');
+			else if (typeof window._ === 'function') msg = window._('Some fields are invalid, cannot save values!');
+			return window.cbi_validate_form(form, msg);
+		}
+
+		// 23.05 起 luci.js 提供 L.require；经典 CBI 页面不预载 ui.js，
+		// 所以不能假定全局有 ui（旧代码就踩了这个坑）。
+		function loadUI() {
+			if (window.L && typeof L.require === 'function') {
+				return L.require('ui').then(function(ui) {
+					if (!ui || !ui.changes || typeof ui.changes.apply !== 'function')
+						throw new Error('ui.changes.apply unavailable');
+					return ui;
+				});
+			}
+			if (window.ui && window.ui.changes && typeof window.ui.changes.apply === 'function')
+				return Promise.resolve(window.ui);
+			return Promise.reject(new Error('ui unavailable'));
+		}
+
+		// 隐藏的 cbi.apply（主题/下拉后注入）会跟着 FormData 一起提交，
+		// display:none 拦不住，必须 disabled。
+		function neutralizeApplyFields(root) {
+			var els = (root || document).querySelectorAll('input[name="cbi.apply"], select[name="cbi.apply"]');
+			for (var i = 0; i < els.length; i++) {
+				var t = (els[i].type || '').toLowerCase();
+				if (t === 'submit' || t === 'button') continue;
+				els[i].disabled = true;
+			}
+		}
+
+		function run(force, trigger) {
 			if (busy) return;
 
-			// 环境不支持就退回原生
-			if (typeof ui === 'undefined' || !ui.changes || typeof ui.changes.apply !== 'function') {
-				nativeSubmit(force);
-				return;
-			}
+			var form = findForm(trigger);
+			if (!form || !validate(form)) return;
 
 			busy = true;
+			// apply 成功后 LuCI 会自己刷新页面；失败时留一条退路
+			window.setTimeout(function() { busy = false; }, 20000);
 
-			// 只保存：去掉 cbi.apply，服务端只写暂存区
+			var action = form.getAttribute('action') || window.location.href;
 			var data = new FormData(form);
 			data.delete('cbi.apply');
 
-			fetch(window.location.pathname, {
+			if (typeof window.fetch !== 'function') {
+				busy = false;
+				nativeSubmit(form, force);
+				return;
+			}
+
+			fetch(action, {
 				method: 'POST',
 				body: data,
 				credentials: 'same-origin'
 			}).then(function(r) {
 				if (!r.ok) throw new Error('HTTP ' + r.status);
-				return ui.changes.apply();     // ★ 原生遮罩 ★
-			}).then(function() {
-				window.location.reload();
+				return loadUI();
+			}).then(function(ui) {
+				// true  = 普通「保存并应用」（checked，带回滚保护）
+				// false = 「强制应用」（unchecked，与 LuCI 原生语义一致）
+				ui.changes.apply(!force);
 			}).catch(function() {
 				busy = false;
-				nativeSubmit(force);           // 兜底
+				nativeSubmit(form, force);   // 兜底：原生提交，至少保证保存生效
 			});
 		}
 
-		// ---------- 形态 ③：主题把按钮改成了 apply 下拉 ----------
-		// bootstrap 等主题会把「保存并应用」渲染成：
-		//   <div class="cbi-dropdown cbi-button-apply">
-		//     <li data-value="0">保存并应用</li><li data-value="1">强制应用</li>
-		//   </div>
-		// 1.0.4 的页脚本来是三个平按钮，没有下拉。
-		// 所以这里把下拉藏掉，原地换成一个外观一致的平按钮，
-		// 点击走 JS（只保存 + ui.changes.apply()），一步还原 1.0.4 的布局。
-		var dd = form.querySelector('.cbi-page-actions .cbi-dropdown.cbi-button-apply')
-			|| form.querySelector('.cbi-dropdown.cbi-button-apply')
-			|| document.querySelector('.cbi-dropdown.cbi-button-apply');
+		// 统一接管：document capture 先于页脚内联 onclick 执行
+		document.addEventListener('click', function(ev) {
+			var t = ev.target;
+			if (!t || !t.closest) return;
 
-		if (dd) {
-			var flat = document.createElement('button');
-			flat.type = 'button';
-			flat.className = 'cbi-button cbi-button-apply';
-			flat.textContent = '保存并应用';
-			flat.addEventListener('click', function() { run(false); });
+			// 形态③：下拉（JS 表单 / 定制主题）
+			var dd = t.closest('.cbi-dropdown.cbi-button-apply');
+			if (dd) {
+				var item = t.closest('li[data-value]');
+				ev.preventDefault();
+				ev.stopPropagation();
+				run(!!(item && item.getAttribute('data-value') === '1'), dd);
+				return;
+			}
 
-			dd.parentNode.insertBefore(flat, dd);
-			dd.style.display = 'none';      // 保留元素，避免 cbi.js 引用报错
-			return;
-		}
+			// 形态①② + 经典页脚：23.05~25.12 都是 .cbi-button-apply
+			var btn = t.closest(
+				'.cbi-page-actions .cbi-button-apply, ' +
+				'[name="cbi.apply"]'
+			);
+			if (!btn) return;
 
-		// ---------- 形态 ①②：经典按钮 ----------
-		var native = form.querySelector('input[name="cbi.apply"], button[name="cbi.apply"]');
-		if (!native) return;
-
-		var jsBtn;
-		if (native.tagName === 'INPUT') {
-			jsBtn = document.createElement('input');
-			jsBtn.type = 'button';
-			jsBtn.value = native.value;
-		} else {
-			jsBtn = document.createElement('button');
-			jsBtn.type = 'button';
-			jsBtn.textContent = native.textContent.trim();
-		}
-		jsBtn.className = native.className;
-		jsBtn.addEventListener('click', function() { run(false); });
-
-		native.parentNode.insertBefore(jsBtn, native);
-		native.style.display = 'none';
-
-		// 回车提交也走 JS
-		form.addEventListener('submit', function(ev) {
 			ev.preventDefault();
-			run(false);
-		});
+			ev.stopPropagation();   // 阻止内联 cbi_submit(this, 'cbi.apply')
+			run(false, btn);
+		}, true);
+
+		neutralizeApplyFields(document);
+		window.setTimeout(function() {
+			neutralizeApplyFields(document);   // 主题可能在初始化后再补隐藏字段
+		}, 400);
 	}
 
 	if (document.readyState === 'loading') {
-		document.addEventListener('DOMContentLoaded', zjkjuSaveApply);
+		document.addEventListener('DOMContentLoaded', zjkjuInstallApplyMask);
 	} else {
-		zjkjuSaveApply();
+		zjkjuInstallApplyMask();
 	}
 })();
 </script>

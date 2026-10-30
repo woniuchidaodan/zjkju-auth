@@ -439,6 +439,7 @@ URL="%s"
 EXT="%s"
 WANT_HASH="%s"
 TOTAL_HINT="%s"
+EXPECT_VER="%s"
 TARGET="/tmp/zjkju_auth_update.$EXT"
 STATUS_FILE="/tmp/zjkju_update_status"
 PROXIES="/ gh-proxy.com/ ghfast.top/"
@@ -448,6 +449,21 @@ PROXIES="/ gh-proxy.com/ ghfast.top/"
 #       所以这里用 echo -n 而不是 printf
 set_status() {
     echo -n "$1" > "$STATUS_FILE.tmp" 2>/dev/null && mv -f "$STATUS_FILE.tmp" "$STATUS_FILE" 2>/dev/null
+}
+
+# 读取已安装版本：opkg 为 "1.0.5-1"，apk 为 "luci-app-zjkju-auth-1.0.5-r1"
+inst_ver() {
+    V=$(opkg status luci-app-zjkju-auth 2>/dev/null | sed -n 's/^Version: *//p' | head -n1)
+    if [ -z "$V" ]; then
+        V=$(apk info -v luci-app-zjkju-auth 2>/dev/null | head -n1 | sed -n 's/.*-\([0-9][0-9.]*-r[0-9][0-9]*\).*/\1/p')
+    fi
+    echo "$V"
+}
+
+# 比较用的归一化：去掉 -beta 之类的字母后缀，再去掉所有字母
+# 于是 "1.0.5-1" 与 "1.0.5-r1" 都变成 "1.0.5-1"
+cmp_ver() {
+    echo "$1" | sed 's/-[A-Za-z][A-Za-z-]*$//' | sed 's/[A-Za-z]//g'
 }
 
 set_status "1|下载中|0"
@@ -500,6 +516,24 @@ for P in $PROXIES; do
             else
                 apk add --allow-untrusted "$TARGET" >/dev/null 2>&1
             fi
+            INSTALL_RC=$?
+
+            # 【修复】以前不看安装返回码，装失败也报"安装完成"。
+            # 现在失败就停下，并把安装包留在 /tmp 供手动重装。
+            if [ "$INSTALL_RC" != "0" ]; then
+                set_status "-1|安装失败(rc=$INSTALL_RC)，安装包保留在 $TARGET|0"
+                rm -f "$0"
+                exit 1
+            fi
+
+            # 返回 0 也不代表真的换上了（已安装同版本、被占用等），再核对一次版本
+            NEW_VER=$(inst_ver)
+            if [ -n "$NEW_VER" ] && [ "$(cmp_ver "$NEW_VER")" != "$(cmp_ver "$EXPECT_VER")" ]; then
+                set_status "-1|安装后版本仍为 $NEW_VER（目标 $EXPECT_VER），未生效|0"
+                rm -f "$0"
+                exit 1
+            fi
+
             rm -f "$TARGET" "$0"
             /etc/init.d/zjkju-auth restart >/dev/null 2>&1
             set_status "4|安装完成|100"
@@ -511,7 +545,7 @@ done
 set_status "-1|下载失败或校验不通过，请重试或手动下载|0"
 rm -f "$0"
 exit 1
-]], url, ext, want_hash, total_size)
+]], url, ext, want_hash, total_size, latest)
 	if not fmt_ok then
 		http.write_json({ success = false, error = "生成更新脚本出错：" .. tostring(script_content) })
 		return
