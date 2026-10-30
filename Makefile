@@ -48,6 +48,9 @@ rm -rf /tmp/luci-modulecache/
 /etc/init.d/rpcd reload 2>/dev/null
 
 if [ -f /etc/init.d/zjkju-auth ]; then
+    # 旧版禁用时会把 /etc/rc.d/S99zjkju-auth 删掉，导致重启后没有进程重新
+    # 注册 service/触发器（禁用→启用后不启动的根因之一）。升级时补回自启。
+    /etc/init.d/zjkju-auth enable >/dev/null 2>&1
     /etc/init.d/zjkju-auth restart >/dev/null 2>&1 || true
 fi
 
@@ -58,11 +61,23 @@ define Package/luci-app-zjkju-auth/postrm
 #!/bin/sh
 [ -z "$${IPKG_INSTROOT}" ] || exit 0
 
-# 只在"真正卸载"时清理；升级（$$1 = upgrade）时保留配置，什么都不做
-case "$$1" in
-	remove) ;;
-	*) exit 0 ;;
+# 只在"真正卸载"时清理；升级时保留配置。
+#
+# opkg：升级时脚本参数里带 upgrade（remove 时带 remove）。
+# apk ：post-deinstall 只在 purge 时执行（升级走 post-upgrade，根本不会到这里），
+#       而且它传进来的参数是被卸载的版本号（如 1.0.5-r1），不是 "remove"。
+#
+# 所以原来写 case "$$1" in remove) 是错误的：apk 卸载时 $$1 是版本号，
+# 会直接落到 *) exit 0，配置/日志/进程全都清不掉。这里改为"只要参数里没有
+# upgrade 就按卸载处理"。
+case "$$*" in
+	*upgrade*) exit 0 ;;
 esac
+
+# 兜底：完全没有参数、但包内文件还在（异常调用），按升级处理，别误删配置
+if [ -z "$$*" ] && [ -f /usr/bin/zjkju-auth-wrapper.sh ]; then
+	exit 0
+fi
 
 # ========== 1. 停服务、清进程 ==========
 /etc/init.d/zjkju-auth stop >/dev/null 2>&1

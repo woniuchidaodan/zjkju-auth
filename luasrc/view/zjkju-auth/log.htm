@@ -22,12 +22,12 @@ end
 %>
 
 <style>
-.zjkju-wrapper { padding: 20px; }
+.zjkju-wrapper { padding: 20px 20px 32px; }
 .zjkju-toolbar {
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
-	margin-bottom: 15px;
+	margin-bottom: 18px;
 	flex-wrap: wrap;
 	gap: 10px;
 }
@@ -99,6 +99,70 @@ end
 .zjkju-btn-danger:hover { background: #c0392b; box-shadow: 0 4px 10px rgba(231, 76, 60, 0.35); transform: translateY(-1px); }
 .zjkju-btn-danger:active { background: #a93226; box-shadow: 0 1px 2px rgba(231, 76, 60, 0.3); transform: translateY(0); }
 .zjkju-btn-danger:focus { box-shadow: 0 0 0 3px rgba(231, 76, 60, 0.25); }
+
+/* ============================================================
+ * 底部「保存并应用 / 保存 / 复位」与上方 .zjkju-btn 统一配色
+ * 主题（Argon/Bootstrap）对 .cbi-button 的样式差异很大，这里用
+ * input.cbi-button 提高优先级覆盖；「复位」对应「清空日志」的红色。
+ * ============================================================ */
+.cbi-page-actions input.cbi-button {
+	display: inline-flex !important;
+	align-items: center;
+	justify-content: center;
+	padding: 8px 18px !important;
+	min-height: 34px;
+	background: #2f80ed !important;
+	border: 0 !important;
+	border-radius: 8px !important;
+	color: #fff !important;
+	font-size: 13px !important;
+	font-weight: 500 !important;
+	line-height: 1.2;
+	white-space: nowrap;
+	letter-spacing: 0.3px;
+	box-shadow: 0 1px 3px rgba(47, 128, 237, 0.2) !important;
+	transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+	cursor: pointer;
+	text-shadow: none !important;
+}
+.cbi-page-actions input.cbi-button:hover {
+	background: #1c6dd0 !important;
+	box-shadow: 0 4px 10px rgba(47, 128, 237, 0.35) !important;
+	transform: translateY(-1px);
+}
+.cbi-page-actions input.cbi-button:active {
+	background: #155bb5 !important;
+	box-shadow: 0 1px 2px rgba(47, 128, 237, 0.3) !important;
+	transform: translateY(0);
+}
+.cbi-page-actions input.cbi-button:focus {
+	outline: none;
+	box-shadow: 0 0 0 3px rgba(47, 128, 237, 0.25) !important;
+}
+.cbi-page-actions input.cbi-button-reset {
+	background: #e74c3c !important;
+	box-shadow: 0 1px 3px rgba(231, 76, 60, 0.2) !important;
+}
+.cbi-page-actions input.cbi-button-reset:hover {
+	background: #c0392b !important;
+	box-shadow: 0 4px 10px rgba(231, 76, 60, 0.35) !important;
+}
+.cbi-page-actions input.cbi-button-reset:active {
+	background: #a93226 !important;
+	box-shadow: 0 1px 2px rgba(231, 76, 60, 0.3) !important;
+}
+.cbi-page-actions input.cbi-button-reset:focus {
+	box-shadow: 0 0 0 3px rgba(231, 76, 60, 0.25) !important;
+}
+.cbi-page-actions input.cbi-button[disabled],
+.cbi-page-actions input.cbi-button[disabled]:hover,
+.cbi-page-actions input.cbi-button[disabled]:active {
+	background: #9aa4b2 !important;
+	box-shadow: none !important;
+	transform: none !important;
+	opacity: 0.65;
+	cursor: not-allowed;
+}
 </style>
 
 <div class="cbi-section">

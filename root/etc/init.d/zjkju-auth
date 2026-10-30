@@ -12,7 +12,10 @@ start_service() {
 
 	# 留痕：谁在什么时候请求了启动，enabled 读到的是什么
 	if [ "$enabled" != "1" ]; then
-		logger -t zjkju-auth "start_service: enabled=[$enabled] 不启动"
+		# 注意：这里只是「不注册实例」，但 rc.common 仍会执行
+		# procd_close_service，把本次 service set 发给 procd。
+		# 这正是禁用时保留 service/触发器的关键（见 reload_service 注释）。
+		logger -t zjkju-auth "start_service: enabled=[$enabled]，不注册实例（保留 service/触发器）"
 		return 0
 	fi
 	logger -t zjkju-auth "start_service: 注册实例 (enabled=[$enabled])"
@@ -32,15 +35,33 @@ stop_service() {
 
 # 配置被提交并 apply 之后，procd 会调用 reload_service。
 #
-# 这里注册触发器是必要的：
+# 注册触发器是必要的：
 #   LuCI 前端的 ui.changes.apply() 会等到本次 apply 请求返回才收起
 #   「正在应用配置更改… Ns」遮罩。触发器让 apply 走一遍 reload_service，
 #   reload_service 里有一个 2 秒的观察窗口，遮罩因此能被看清。
 #
-# 但 reload_service 内部做的是「条件启停」：
-#   已启用 + 在跑   → 不重启（wrapper 每轮会重读配置）
-#   已启用 + 没跑   → 启动
-#   未启用          → 停止并移除自启
+# 【关键：禁用 = stop + 立刻补一次 start】
+#
+#   必须 stop：
+#     rc.common 的 stop → procd_kill → ubus call service delete，
+#     procd 会给实例主进程发 TERM（超时再 KILL）并把实例从 service 移除；
+#     下面还会再扫一遍残留进程，确保「禁用」之后一个不剩。
+#
+#   但 stop 之后必须马上补一次 start：
+#     service delete 会连 service 对象和 service_triggers 注册的
+#     config.change 触发器一起删掉（procd service.c 的 service_stopped()：
+#     deleted 且实例为空时 trigger_del + free）。
+#     之后在 LuCI 里重新勾选“启用”并保存，commit 发出的 config.change
+#     没有任何接收者，reload_service 不会被调用，程序自然不启动，
+#     只能手动点“重启服务”——这正是「取消勾选 → 再勾选保存 → 不启动」的根因。
+#
+#     补的这次 start 在 enabled=0 时不注册实例，但 rc.common 仍会
+#     procd_close_service → service set，把 triggers 重新注册回来；
+#     于是最终状态是「进程全部停止 + service/触发器还在」，
+#     下次勾选启用保存时 config.change 能立刻唤醒 reload_service，一气呵成。
+#
+#   另外不要 disable：/etc/rc.d/S99zjkju-auth 必须一直在，
+#   否则重启后没有进程重新注册 service/触发器，禁用→启用照样失效。
 service_triggers() {
 	procd_add_reload_trigger "zjkju-auth"
 }
@@ -54,11 +75,13 @@ reload_service() {
 	# 观察窗口：让前端原生读秒遮罩停留 2 秒，任何主题下都看得见
 	sleep 2
 
+	# 老版本禁用时会删掉自启链接；这里补回来，保证下次重启仍能注册触发器
+	[ -f /etc/rc.d/S99zjkju-auth ] || /etc/init.d/zjkju-auth enable >/dev/null 2>&1
+
 	config_load zjkju-auth
 	config_get_bool enabled main enabled 0
 
 	if [ "$enabled" = "1" ]; then
-		[ -f /etc/rc.d/S99zjkju-auth ] || /etc/init.d/zjkju-auth enable >/dev/null 2>&1
 		if _zjkju_running; then
 			logger -t zjkju-auth "reload_service: 已启用且运行中，不重启"
 		else
@@ -66,12 +89,18 @@ reload_service() {
 			/etc/init.d/zjkju-auth start >/dev/null 2>&1
 		fi
 	else
-		/etc/init.d/zjkju-auth disable >/dev/null 2>&1
-		if _zjkju_running; then
-			logger -t zjkju-auth "reload_service: 已禁用，停止"
-			/etc/init.d/zjkju-auth stop >/dev/null 2>&1
-		else
-			logger -t zjkju-auth "reload_service: 已禁用且未运行，仅移除自启"
-		fi
+		# 1) 真正停止：procd 会向实例主进程发 TERM（超时再 KILL）
+		/etc/init.d/zjkju-auth stop >/dev/null 2>&1
+
+		# 2) 兜底：确保 wrapper 和它后台起的子进程一个不剩
+		#    （procd 只对主进程发信号，ntpd 这类后台子进程要自己收尾）
+		sleep 1
+		for p in $(ps w 2>/dev/null | grep -E '[z]jkju-auth-wrapper|[r]uijie' | awk '{print $1}'); do
+			kill -9 "$p" 2>/dev/null
+		done
+
+		# 3) 立刻把 service/触发器注册回来（enabled=0 → 不注册实例）
+		/etc/init.d/zjkju-auth start >/dev/null 2>&1
+		logger -t zjkju-auth "reload_service: 已禁用，进程已全部停止，触发器已重新注册"
 	fi
 }
