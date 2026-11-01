@@ -63,8 +63,8 @@
 
 | 文件名 | 适用系统 | 架构 |
 |--------|----------|------|
-| `luci-app-zjkju-auth_1.0.5-r1_all.ipk` | 使用 opkg 的系统（23.05 ~ 24.10） | **全架构** |
-| `luci-app-zjkju-auth-1.0.5-r1.apk` | 使用 apk 的系统（25.12+） | **全架构** |
+| `luci-app-zjkju-auth_*1_all.ipk` | 使用 opkg 的系统（23.05 ~ 24.10） | **全架构** |
+| `luci-app-zjkju-auth-*.apk` | 使用 apk 的系统（25.12+） | **全架构** |
 
 Beta 版本以 `-beta` 结尾并标记为 pre-release，需在「其他设置」中开启「接收测试版」才会收到更新提示。
 
@@ -73,7 +73,7 @@ Beta 版本以 `-beta` 结尾并标记为 pre-release，需在「其他设置」
 ### 1. 上传安装包到路由器
 
 ```bash
-scp luci-app-zjkju-auth_1.0.5-r1_all.ipk root@192.168.1.1:/tmp/
+scp luci-app-zjkju-auth_*_all.ipk root@192.168.1.1:/tmp/
 ```
 
 ### 2. SSH 登录路由器安装
@@ -81,10 +81,10 @@ scp luci-app-zjkju-auth_1.0.5-r1_all.ipk root@192.168.1.1:/tmp/
 ```bash
 # opkg 系统（23.05 / 24.10）
 opkg update
-opkg install /tmp/luci-app-zjkju-auth_1.0.5-r1_all.ipk
+opkg install /tmp/luci-app-zjkju-auth_*_all.ipk
 
 # apk 系统（25.12+）
-apk add --allow-untrusted /tmp/luci-app-zjkju-auth-1.0.5-r1.apk
+apk add --allow-untrusted /tmp/luci-app-zjkju-auth-*.apk
 ```
 
 如果提示缺少依赖，先执行：
